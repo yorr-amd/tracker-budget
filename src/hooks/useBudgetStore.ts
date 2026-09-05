@@ -27,7 +27,12 @@ export function useBudgetStore() {
   const [isInitialized, setIsInitialized] = useState(false);
 
   useEffect(() => {
-    initializeDatabase().then(() => setIsInitialized(true));
+    initializeDatabase()
+      .then(() => setIsInitialized(true))
+      .catch((err) => {
+        console.error('Failed to initialize database:', err);
+        setIsInitialized(true);
+      });
   }, []);
 
   const accounts = useLiveQuery(() => db.accounts.toArray(), []) || [];
