@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+:root {
+  --background: #fbf7f6;
+  --foreground: #1c0d10;
+  --primary-burgundy: #7b1824;
+}
+
+.dark {
+  --background: #0f0709;
+  --foreground: #fcf6f7;
+  --primary-burgundy: #9e202f;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: var(--background);
+  color: var(--foreground);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Custom scrollbar for desktop app matching Burgundy/Cream aesthetic */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(141, 24, 39, 0.25);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(141, 24, 39, 0.45);
+}
