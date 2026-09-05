@@ -1,5 +1,6 @@
 {
-  "name": "tauri-app",
+  "name": "tracker-budget",
+  "description": "Luxury Personal Finance & Budget Tracker Desktop App built with Tauri v2, React 19, and Dexie.js",
   "private": true,
   "version": "0.1.0",
   "type": "module",
