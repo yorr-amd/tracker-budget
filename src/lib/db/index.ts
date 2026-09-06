@@ -1,4 +1,4 @@
-import Dexie, { type Table } from 'dexie';
+import Database from '@tauri-apps/plugin-sql';
 import {
   Account,
   Category,
@@ -10,383 +10,520 @@ import {
   Installment,
 } from '@/types';
 import { DEFAULT_ACCOUNTS, DEFAULT_CATEGORIES } from '../constants/defaults';
-import { generateId, getTodayDateString, calculateNextDueDate } from '../utils';
+import { generateId } from '../utils';
 
-export class BudgetDatabase extends Dexie {
-  accounts!: Table<Account, string>;
-  categories!: Table<Category, string>;
-  transactions!: Table<Transaction, string>;
-  budgets!: Table<Budget, string>;
-  savingsGoals!: Table<SavingsGoal, string>;
-  savingsLogs!: Table<SavingsLog, string>;
-  recurringTransactions!: Table<RecurringTransaction, string>;
-  installments!: Table<Installment, string>;
+let dbInstance: Database | null = null;
 
-  constructor() {
-    super('TrackerBudgetTauriDB');
-    this.version(1).stores({
-      accounts: 'id, name, type, isDefault',
-      categories: 'id, name, type, parentId',
-      transactions: 'id, accountId, toAccountId, categoryId, type, date, isRecurring',
-      budgets: 'id, categoryId, period',
-      savingsGoals: 'id, isCompleted',
-      savingsLogs: 'id, goalId, accountId, date',
-      recurringTransactions: 'id, isActive, nextDueDate',
-      installments: 'id, type, isCompleted, nextDueDate',
-    });
+// Helper to get or initialize the DB connection
+export async function getDb(): Promise<Database> {
+  if (!dbInstance) {
+    dbInstance = await Database.load('sqlite:tracker_budget.db');
   }
+  return dbInstance;
 }
 
-export const db = new BudgetDatabase();
-
-// Inisialisasi Database dengan Data Bawaan jika masih kosong
+// Inisialisasi Database dengan Skema dan Data Bawaan
 export async function initializeDatabase() {
-  const accountCount = await db.accounts.count();
-  if (accountCount === 0) {
-    await db.accounts.bulkAdd(DEFAULT_ACCOUNTS);
+  const db = await getDb();
+  
+  // Create Tables
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS accounts (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL,
+      balance REAL DEFAULT 0,
+      icon TEXT,
+      color TEXT,
+      isDefault INTEGER DEFAULT 0,
+      accountNumber TEXT,
+      createdAt TEXT
+    )
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS categories (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      type TEXT NOT NULL,
+      icon TEXT,
+      color TEXT,
+      parentId TEXT,
+      isDefault INTEGER DEFAULT 0
+    )
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS transactions (
+      id TEXT PRIMARY KEY,
+      accountId TEXT NOT NULL,
+      toAccountId TEXT,
+      categoryId TEXT NOT NULL,
+      amount REAL NOT NULL,
+      type TEXT NOT NULL,
+      date TEXT NOT NULL,
+      notes TEXT,
+      isRecurring INTEGER DEFAULT 0,
+      goalId TEXT,
+      adminFee REAL DEFAULT 0,
+      createdAt TEXT
+    )
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS budgets (
+      id TEXT PRIMARY KEY,
+      categoryId TEXT NOT NULL,
+      amountLimit REAL NOT NULL,
+      period TEXT NOT NULL,
+      alertThreshold REAL,
+      createdAt TEXT
+    )
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS savingsGoals (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      targetAmount REAL NOT NULL,
+      currentAmount REAL DEFAULT 0,
+      targetDate TEXT,
+      icon TEXT,
+      color TEXT,
+      isCompleted INTEGER DEFAULT 0,
+      createdAt TEXT
+    )
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS savingsLogs (
+      id TEXT PRIMARY KEY,
+      goalId TEXT NOT NULL,
+      accountId TEXT NOT NULL,
+      amount REAL NOT NULL,
+      date TEXT NOT NULL,
+      notes TEXT,
+      createdAt TEXT
+    )
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS recurringTransactions (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      amount REAL NOT NULL,
+      type TEXT NOT NULL,
+      categoryId TEXT NOT NULL,
+      accountId TEXT NOT NULL,
+      toAccountId TEXT,
+      frequency TEXT NOT NULL,
+      dayOfMonth INTEGER,
+      nextDueDate TEXT,
+      notes TEXT,
+      isActive INTEGER DEFAULT 1,
+      autoCreate INTEGER DEFAULT 0,
+      createdAt TEXT
+    )
+  `);
+
+  await db.execute(`
+    CREATE TABLE IF NOT EXISTS installments (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      totalAmount REAL,
+      monthlyAmount REAL NOT NULL,
+      totalTenorMonths INTEGER NOT NULL,
+      currentInstallment INTEGER NOT NULL,
+      dueDayOfMonth INTEGER NOT NULL,
+      nextDueDate TEXT,
+      accountId TEXT NOT NULL,
+      notes TEXT,
+      isCompleted INTEGER DEFAULT 0,
+      createdAt TEXT
+    )
+  `);
+
+  // Seed Default Accounts if empty
+  const accounts: any[] = await db.select('SELECT count(*) as count FROM accounts');
+  if (accounts[0].count === 0) {
+    for (const acc of DEFAULT_ACCOUNTS) {
+      await db.execute(
+        `INSERT INTO accounts (id, name, type, balance, icon, color, isDefault, accountNumber, createdAt) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+        [
+          acc.id, acc.name, acc.type, acc.balance, acc.icon, acc.color, acc.isDefault ? 1 : 0, 
+          acc.accountNumber || null,  new Date().toISOString()
+        ]
+      );
+    }
   }
 
-  const categoryCount = await db.categories.count();
-  if (categoryCount === 0) {
-    await db.categories.bulkAdd(DEFAULT_CATEGORIES);
+  // Seed Default Categories if empty
+  const categories: any[] = await db.select('SELECT count(*) as count FROM categories');
+  if (categories[0].count === 0) {
+    for (const cat of DEFAULT_CATEGORIES) {
+      await db.execute(
+        `INSERT INTO categories (id, name, type, icon, color, parentId, isDefault) 
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          cat.id, cat.name, cat.type, cat.icon, cat.color, cat.parentId || null, cat.isDefault ? 1 : 0
+        ]
+      );
+    }
   }
-
 }
 
-// Operasi Transaksi Atomik dengan Pembaruan Saldo Otomatis
+// Map helper to convert boolean INT back to boolean
+const mapBoolean = (val: any) => val === 1 || val === true;
+
+// Basic Read Operations
+export async function getAccounts(): Promise<Account[]> {
+  const db = await getDb();
+  const rows = await db.select<any[]>('SELECT * FROM accounts');
+  return rows.map(r => ({ ...r, isDefault: mapBoolean(r.isDefault) }));
+}
+
+export async function getCategories(): Promise<Category[]> {
+  const db = await getDb();
+  const rows = await db.select<any[]>('SELECT * FROM categories');
+  return rows.map(r => ({ ...r, isDefault: mapBoolean(r.isDefault) }));
+}
+
+export async function getTransactions(): Promise<Transaction[]> {
+  const db = await getDb();
+  const rows = await db.select<any[]>('SELECT * FROM transactions ORDER BY date DESC, createdAt DESC');
+  return rows.map(r => ({ ...r, isRecurring: mapBoolean(r.isRecurring) }));
+}
+
+export async function getBudgets(): Promise<Budget[]> {
+  const db = await getDb();
+  return await db.select<Budget[]>('SELECT * FROM budgets');
+}
+
+export async function getSavingsGoals(): Promise<SavingsGoal[]> {
+  const db = await getDb();
+  const rows = await db.select<any[]>('SELECT * FROM savingsGoals');
+  return rows.map(r => ({ ...r, isCompleted: mapBoolean(r.isCompleted) }));
+}
+
+export async function getSavingsLogs(): Promise<SavingsLog[]> {
+  const db = await getDb();
+  return await db.select<SavingsLog[]>('SELECT * FROM savingsLogs');
+}
+
+export async function getRecurringTransactions(): Promise<RecurringTransaction[]> {
+  const db = await getDb();
+  const rows = await db.select<any[]>('SELECT * FROM recurringTransactions');
+  return rows.map(r => ({ ...r, isActive: mapBoolean(r.isActive) }));
+}
+
+export async function getInstallments(): Promise<Installment[]> {
+  const db = await getDb();
+  const rows = await db.select<any[]>('SELECT * FROM installments');
+  return rows.map(r => ({ ...r, isCompleted: mapBoolean(r.isCompleted) }));
+}
+
+export async function executeUpdate<T>(query: string, params: any[]): Promise<void> {
+    const db = await getDb();
+    await db.execute(query, params);
+}
+
+// Operasi Transaksi Atomik dengan Pembaruan Saldo
 export async function createTransaction(tx: Omit<Transaction, 'id' | 'createdAt'>): Promise<string> {
-  return await db.transaction('rw', [db.transactions, db.accounts], async () => {
-    const id = generateId();
-    const newTx: Transaction = {
-      ...tx,
-      id,
-      createdAt: new Date().toISOString(),
-    };
+  const db = await getDb();
+  const id = generateId();
+  const createdAt = new Date().toISOString();
+  
+  await db.execute('BEGIN TRANSACTION');
+  try {
+    const accRows = await db.select<any[]>('SELECT balance FROM accounts WHERE id = $1', [tx.accountId]);
+    if (accRows.length === 0) throw new Error('Account not found');
+    let balance = accRows[0].balance;
 
-    // Update Saldo Akun Sumber
-    const sourceAccount = await db.accounts.get(tx.accountId);
-    if (sourceAccount) {
-      let newBalance = sourceAccount.balance;
-      if (tx.type === 'expense') {
-        newBalance -= tx.amount;
-      } else if (tx.type === 'income') {
-        newBalance += tx.amount;
-      } else if (tx.type === 'transfer') {
-        const totalDeduction = tx.amount + (tx.adminFee || 0);
-        newBalance -= totalDeduction;
-
-        // Update Saldo Akun Tujuan jika transfer
-        if (tx.toAccountId) {
-          const destAccount = await db.accounts.get(tx.toAccountId);
-          if (destAccount) {
-            await db.accounts.update(tx.toAccountId, {
-              balance: destAccount.balance + tx.amount,
-            });
-          }
+    if (tx.type === 'expense') {
+      balance -= tx.amount;
+    } else if (tx.type === 'income') {
+      balance += tx.amount;
+    } else if (tx.type === 'transfer') {
+      const totalDeduction = tx.amount + (tx.adminFee || 0);
+      balance -= totalDeduction;
+      
+      if (tx.toAccountId) {
+        const destRows = await db.select<any[]>('SELECT balance FROM accounts WHERE id = $1', [tx.toAccountId]);
+        if (destRows.length > 0) {
+          await db.execute('UPDATE accounts SET balance = $1 WHERE id = $2', [destRows[0].balance + tx.amount, tx.toAccountId]);
         }
       }
-      await db.accounts.update(tx.accountId, { balance: newBalance });
     }
+    
+    await db.execute('UPDATE accounts SET balance = $1 WHERE id = $2', [balance, tx.accountId]);
+    
+    await db.execute(`
+      INSERT INTO transactions (id, accountId, toAccountId, categoryId, amount, type, date, notes, isRecurring, goalId, adminFee, createdAt)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+    `, [
+      id, tx.accountId, tx.toAccountId || null, tx.categoryId, tx.amount, tx.type, tx.date, tx.notes || null,
+      tx.isRecurring ? 1 : 0, tx.goalId || null, tx.adminFee || 0, createdAt
+    ]);
 
-    await db.transactions.add(newTx);
+    await db.execute('COMMIT');
     return id;
-  });
+  } catch (error) {
+    await db.execute('ROLLBACK');
+    throw error;
+  }
 }
 
 export async function deleteTransaction(id: string): Promise<void> {
-  await db.transaction('rw', [db.transactions, db.accounts, db.savingsGoals, db.savingsLogs], async () => {
-    const tx = await db.transactions.get(id);
-    if (!tx) return;
+  const db = await getDb();
+  await db.execute('BEGIN TRANSACTION');
+  try {
+    const txRows = await db.select<any[]>('SELECT * FROM transactions WHERE id = $1', [id]);
+    if (txRows.length === 0) {
+      await db.execute('ROLLBACK');
+      return;
+    }
+    const tx = txRows[0];
 
-    // Rollback Saldo Akun
-    const sourceAccount = await db.accounts.get(tx.accountId);
-    if (sourceAccount) {
-      let newBalance = sourceAccount.balance;
+    const accRows = await db.select<any[]>('SELECT balance FROM accounts WHERE id = $1', [tx.accountId]);
+    if (accRows.length > 0) {
+      let balance = accRows[0].balance;
       if (tx.type === 'expense') {
-        newBalance += tx.amount;
+        balance += tx.amount;
       } else if (tx.type === 'income') {
-        newBalance -= tx.amount;
+        balance -= tx.amount;
       } else if (tx.type === 'transfer') {
         const totalDeduction = tx.amount + (tx.adminFee || 0);
-        newBalance += totalDeduction;
-
+        balance += totalDeduction;
+        
         if (tx.toAccountId) {
-          const destAccount = await db.accounts.get(tx.toAccountId);
-          if (destAccount) {
-            await db.accounts.update(tx.toAccountId, {
-              balance: destAccount.balance - tx.amount,
-            });
+          const destRows = await db.select<any[]>('SELECT balance FROM accounts WHERE id = $1', [tx.toAccountId]);
+          if (destRows.length > 0) {
+            await db.execute('UPDATE accounts SET balance = $1 WHERE id = $2', [destRows[0].balance - tx.amount, tx.toAccountId]);
           }
         }
       }
-      await db.accounts.update(tx.accountId, { balance: newBalance });
+      await db.execute('UPDATE accounts SET balance = $1 WHERE id = $2', [balance, tx.accountId]);
     }
 
-    // Rollback saldo Celengan/Tabungan jika transaksi terhubung dengan target tabungan
+    // Rollback savings goal if linked
     if (tx.goalId) {
-      const goal = await db.savingsGoals.get(tx.goalId);
-      if (goal) {
+      const goalRows = await db.select<any[]>('SELECT currentAmount, targetAmount FROM savingsGoals WHERE id = $1', [tx.goalId]);
+      if (goalRows.length > 0) {
+        const goal = goalRows[0];
         let newCurrent = goal.currentAmount;
         if (tx.type === 'expense') {
-          // Menghapus transaksi setoran -> kurangi saldo tabungan
           newCurrent = Math.max(0, goal.currentAmount - tx.amount);
         } else if (tx.type === 'income') {
-          // Menghapus transaksi pencairan -> kembalikan saldo tabungan
           newCurrent = goal.currentAmount + tx.amount;
         }
-        await db.savingsGoals.update(goal.id, {
-          currentAmount: newCurrent,
-          isCompleted: newCurrent >= goal.targetAmount,
-        });
+        await db.execute('UPDATE savingsGoals SET currentAmount = $1, isCompleted = $2 WHERE id = $3', 
+          [newCurrent, newCurrent >= goal.targetAmount ? 1 : 0, tx.goalId]);
       }
-
-      // Bersihkan log mutasi tabungan yang berkesesuaian
-      const logs = await db.savingsLogs.where('goalId').equals(tx.goalId).toArray();
+      
+      const logRows = await db.select<any[]>('SELECT id, amount, accountId FROM savingsLogs WHERE goalId = $1 ORDER BY createdAt DESC', [tx.goalId]);
       const targetAmountToMatch = tx.type === 'expense' ? tx.amount : -tx.amount;
-      const matchedLog = logs.reverse().find(
-        (l) => l.amount === targetAmountToMatch && l.accountId === tx.accountId
-      );
+      const matchedLog = logRows.find(l => l.amount === targetAmountToMatch && l.accountId === tx.accountId);
       if (matchedLog) {
-        await db.savingsLogs.delete(matchedLog.id);
+        await db.execute('DELETE FROM savingsLogs WHERE id = $1', [matchedLog.id]);
       }
     }
 
-    await db.transactions.delete(id);
-  });
+    await db.execute('DELETE FROM transactions WHERE id = $1', [id]);
+    await db.execute('COMMIT');
+  } catch (error) {
+    await db.execute('ROLLBACK');
+    throw error;
+  }
 }
 
-export async function updateTransaction(id: string, updatedData: Partial<Transaction>): Promise<void> {
-  await db.transaction('rw', [db.transactions, db.accounts], async () => {
-    const oldTx = await db.transactions.get(id);
-    if (!oldTx) return;
-
-    // 1. Rollback oldTx
-    const sourceAccount = await db.accounts.get(oldTx.accountId);
-    if (sourceAccount) {
-      let rollBalance = sourceAccount.balance;
-      if (oldTx.type === 'expense') rollBalance += oldTx.amount;
-      else if (oldTx.type === 'income') rollBalance -= oldTx.amount;
-      else if (oldTx.type === 'transfer') {
-        rollBalance += oldTx.amount + (oldTx.adminFee || 0);
-        if (oldTx.toAccountId) {
-          const destAccount = await db.accounts.get(oldTx.toAccountId);
-          if (destAccount) {
-            await db.accounts.update(oldTx.toAccountId, { balance: destAccount.balance - oldTx.amount });
-          }
-        }
+export async function updateTransaction(id: string, updates: Partial<Transaction>): Promise<void> {
+  const db = await getDb();
+  await db.execute('BEGIN TRANSACTION');
+  try {
+    const txRows = await db.select<any[]>('SELECT * FROM transactions WHERE id = $1', [id]);
+    if (txRows.length === 0) {
+      await db.execute('ROLLBACK');
+      return;
+    }
+    
+    const fields = Object.keys(updates).filter(k => k !== 'id' && k !== 'createdAt');
+    if (fields.length > 0) {
+      const setClause = fields.map((f, i) => `${f} = $${i + 1}`).join(', ');
+      const values = fields.map(f => (updates as any)[f]);
+      values.push(id);
+      
+      // Map boolean
+      if ('isRecurring' in updates) {
+        const idx = fields.indexOf('isRecurring');
+        values[idx] = updates.isRecurring ? 1 : 0;
       }
-      await db.accounts.update(oldTx.accountId, { balance: rollBalance });
+
+      await db.execute(`UPDATE transactions SET ${setClause} WHERE id = $${values.length}`, values);
     }
-
-    // 2. Apply new merged transaction
-    const newTx: Transaction = {
-      ...oldTx,
-      ...updatedData,
-    };
-
-    const newSourceAccount = await db.accounts.get(newTx.accountId);
-    if (newSourceAccount) {
-      let applyBalance = newSourceAccount.balance;
-      if (newTx.type === 'expense') applyBalance -= newTx.amount;
-      else if (newTx.type === 'income') applyBalance += newTx.amount;
-      else if (newTx.type === 'transfer') {
-        applyBalance -= (newTx.amount + (newTx.adminFee || 0));
-        if (newTx.toAccountId) {
-          const destAccount = await db.accounts.get(newTx.toAccountId);
-          if (destAccount) {
-            await db.accounts.update(newTx.toAccountId, { balance: destAccount.balance + newTx.amount });
-          }
-        }
-      }
-      await db.accounts.update(newTx.accountId, { balance: applyBalance });
-    }
-
-    await db.transactions.put(newTx);
-  });
+    
+    await db.execute('COMMIT');
+  } catch (error) {
+    await db.execute('ROLLBACK');
+    throw error;
+  }
 }
 
-// Tambah Setoran ke Target Tabungan
-export async function depositSavingsGoal(goalId: string, accountId: string, amount: number, notes?: string) {
-  return await db.transaction('rw', [db.savingsGoals, db.savingsLogs, db.accounts, db.transactions], async () => {
-    const goal = await db.savingsGoals.get(goalId);
-    const account = await db.accounts.get(accountId);
-    if (!goal || !account) return;
-
-    // Kurangi saldo akun
-    await db.accounts.update(accountId, { balance: account.balance - amount });
-
-    // Tambah tabungan goal
-    const newCurrent = goal.currentAmount + amount;
-    await db.savingsGoals.update(goalId, {
-      currentAmount: newCurrent,
-      isCompleted: newCurrent >= goal.targetAmount,
-    });
-
-    // Catat log tabungan
-    const logId = generateId();
-    await db.savingsLogs.add({
-      id: logId,
-      goalId,
-      accountId,
-      amount,
-      date: getTodayDateString(),
-      notes: notes || `Setoran tabungan: ${goal.name}`,
-      createdAt: new Date().toISOString(),
-    });
-
-    // Buat transaksi expense khusus tabungan agar terlihat di riwayat
-    await db.transactions.add({
-      id: generateId(),
-      accountId,
-      categoryId: 'cat_other_expense',
-      type: 'expense',
-      amount,
-      date: getTodayDateString(),
-      notes: notes || `Alokasi Tabungan: ${goal.name}`,
-      goalId,
-      createdAt: new Date().toISOString(),
-    });
-  });
-}
-
-// Tarik / Cairkan Dana dari Target Tabungan ke Dompet
-export async function withdrawSavingsGoal(goalId: string, accountId: string, amount: number, notes?: string) {
-  return await db.transaction('rw', [db.savingsGoals, db.savingsLogs, db.accounts, db.transactions], async () => {
-    const goal = await db.savingsGoals.get(goalId);
-    const account = await db.accounts.get(accountId);
-    if (!goal || !account) throw new Error('Target tabungan atau akun tidak ditemukan');
-
-    if (amount <= 0) {
-      throw new Error('Nominal pencairan harus lebih dari Rp 0');
-    }
-
-    if (goal.currentAmount < amount) {
-      throw new Error(`Saldo tabungan tidak mencukupi (Tersedia: Rp ${goal.currentAmount.toLocaleString('id-ID')})`);
-    }
-
-    // Tambah saldo akun penerima
-    await db.accounts.update(accountId, { balance: account.balance + amount });
-
-    // Kurangi saldo tabungan goal
-    const newCurrent = Math.max(0, goal.currentAmount - amount);
-    await db.savingsGoals.update(goalId, {
-      currentAmount: newCurrent,
-      isCompleted: newCurrent >= goal.targetAmount,
-    });
-
-    // Catat log tabungan (nilai negatif menandakan penarikan)
-    const logId = generateId();
-    await db.savingsLogs.add({
-      id: logId,
-      goalId,
-      accountId,
-      amount: -amount,
-      date: getTodayDateString(),
-      notes: notes || `Pencairan tabungan: ${goal.name}`,
-      createdAt: new Date().toISOString(),
-    });
-
-    // Buat transaksi income khusus pencairan tabungan
-    await db.transactions.add({
-      id: generateId(),
-      accountId,
-      categoryId: 'cat_other_income',
-      type: 'income',
-      amount,
-      date: getTodayDateString(),
-      notes: notes || `Pencairan Tabungan: ${goal.name}`,
-      goalId,
-      createdAt: new Date().toISOString(),
-    });
-  });
-}
-
-// Operasi Pembayaran Cicilan (SPayLater & SPinjam)
-export async function payInstallment(installmentId: string): Promise<void> {
-  return await db.transaction('rw', [db.installments, db.transactions, db.accounts], async () => {
-    const inst = await db.installments.get(installmentId);
-    if (!inst) throw new Error('Data cicilan tidak ditemukan');
-    if (inst.isCompleted) throw new Error('Cicilan ini sudah lunas');
-
-    const account = await db.accounts.get(inst.accountId);
-    if (!account) throw new Error('Akun pembayaran tidak ditemukan');
-
-    const isSpaylater = inst.type === 'spaylater';
-    const categoryId = isSpaylater ? 'cat_spaylater' : 'cat_spinjam';
-    const typeLabel = isSpaylater ? 'SPayLater' : 'SPinjam';
-    const notes = `Cicilan ${typeLabel} (${inst.currentInstallment}/${inst.totalTenorMonths}): ${inst.title}`;
-
-    // 1. Catat transaksi pengeluaran
+export async function depositSavingsGoal(goalId: string, accountId: string, amount: number, date: string, notes?: string) {
+  const db = await getDb();
+  await db.execute('BEGIN TRANSACTION');
+  try {
+    const goalRows = await db.select<any[]>('SELECT currentAmount, targetAmount FROM savingsGoals WHERE id = $1', [goalId]);
+    if (goalRows.length === 0) throw new Error('Goal not found');
+    const goal = goalRows[0];
+    
+    const accRows = await db.select<any[]>('SELECT balance FROM accounts WHERE id = $1', [accountId]);
+    if (accRows.length === 0) throw new Error('Account not found');
+    
+    // Create transaction (expense from account)
     const txId = generateId();
-    await db.transactions.add({
-      id: txId,
-      accountId: inst.accountId,
-      categoryId,
-      type: 'expense',
-      amount: inst.monthlyAmount,
-      date: getTodayDateString(),
-      notes,
-      createdAt: new Date().toISOString(),
-    });
+    await db.execute(`
+      INSERT INTO transactions (id, accountId, categoryId, amount, type, date, notes, goalId, createdAt)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `, [txId, accountId, 'cat_savings', amount, 'expense', date, notes || 'Setoran Tabungan', goalId, new Date().toISOString()]);
 
-    // 2. Kurangi saldo akun
-    await db.accounts.update(inst.accountId, {
-      balance: account.balance - inst.monthlyAmount,
-    });
+    // Deduct account balance
+    await db.execute('UPDATE accounts SET balance = balance - $1 WHERE id = $2', [amount, accountId]);
 
-    // 3. Update progres cicilan
-    const nextInstallmentNum = inst.currentInstallment + 1;
-    const isCompleted = nextInstallmentNum > inst.totalTenorMonths;
-    const nextDue = calculateNextDueDate(inst.nextDueDate, 'monthly', inst.dueDayOfMonth);
+    // Update goal
+    const newCurrent = goal.currentAmount + amount;
+    await db.execute('UPDATE savingsGoals SET currentAmount = $1, isCompleted = $2 WHERE id = $3', 
+      [newCurrent, newCurrent >= goal.targetAmount ? 1 : 0, goalId]);
 
-    await db.installments.update(inst.id, {
-      currentInstallment: isCompleted ? inst.totalTenorMonths : nextInstallmentNum,
-      isCompleted,
-      nextDueDate: nextDue,
-    });
-  });
+    // Add log
+    await db.execute(`
+      INSERT INTO savingsLogs (id, goalId, accountId, amount, date, notes, createdAt)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `, [generateId(), goalId, accountId, amount, date, notes || null, new Date().toISOString()]);
+
+    await db.execute('COMMIT');
+  } catch (err) {
+    await db.execute('ROLLBACK');
+    throw err;
+  }
 }
 
-// Reset Database ke Default
+export async function withdrawSavingsGoal(goalId: string, accountId: string, amount: number, date: string, notes?: string) {
+  const db = await getDb();
+  await db.execute('BEGIN TRANSACTION');
+  try {
+    const goalRows = await db.select<any[]>('SELECT currentAmount, targetAmount FROM savingsGoals WHERE id = $1', [goalId]);
+    if (goalRows.length === 0) throw new Error('Goal not found');
+    const goal = goalRows[0];
+    
+    // Create transaction (income to account)
+    const txId = generateId();
+    await db.execute(`
+      INSERT INTO transactions (id, accountId, categoryId, amount, type, date, notes, goalId, createdAt)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `, [txId, accountId, 'cat_savings', amount, 'income', date, notes || 'Pencairan Tabungan', goalId, new Date().toISOString()]);
+
+    // Add account balance
+    await db.execute('UPDATE accounts SET balance = balance + $1 WHERE id = $2', [amount, accountId]);
+
+    // Update goal
+    const newCurrent = Math.max(0, goal.currentAmount - amount);
+    await db.execute('UPDATE savingsGoals SET currentAmount = $1, isCompleted = $2 WHERE id = $3', 
+      [newCurrent, newCurrent >= goal.targetAmount ? 1 : 0, goalId]);
+
+    // Add log
+    await db.execute(`
+      INSERT INTO savingsLogs (id, goalId, accountId, amount, date, notes, createdAt)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `, [generateId(), goalId, accountId, -amount, date, notes || null, new Date().toISOString()]);
+
+    await db.execute('COMMIT');
+  } catch (err) {
+    await db.execute('ROLLBACK');
+    throw err;
+  }
+}
+
+export async function payInstallment(installmentId: string, date: string) {
+  const db = await getDb();
+  await db.execute('BEGIN TRANSACTION');
+  try {
+    const instRows = await db.select<any[]>('SELECT * FROM installments WHERE id = $1', [installmentId]);
+    if (instRows.length === 0) throw new Error('Installment not found');
+    const inst = instRows[0];
+    
+    if (inst.isCompleted || inst.currentInstallment >= inst.totalTenorMonths) {
+      await db.execute('ROLLBACK');
+      throw new Error('Cicilan sudah lunas');
+    }
+    
+    // Create transaction
+    const txId = generateId();
+    await db.execute(`
+      INSERT INTO transactions (id, accountId, categoryId, amount, type, date, notes, installmentId, createdAt)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `, [txId, inst.accountId, 'cat_installments', inst.monthlyAmount, 'expense', date, `Pembayaran ${inst.title} (Ke-${inst.currentInstallment + 1}/${inst.totalTenorMonths})`, installmentId, new Date().toISOString()]);
+    
+    // Deduct account balance
+    await db.execute('UPDATE accounts SET balance = balance - $1 WHERE id = $2', [inst.monthlyAmount, inst.accountId]);
+    
+    // Update installment
+    const newCurrentInstall = inst.currentInstallment + 1;
+    let nextDueDate = inst.nextDueDate;
+    if (newCurrentInstall < inst.totalTenorMonths && nextDueDate) {
+      const d = new Date(nextDueDate);
+      d.setMonth(d.getMonth() + 1);
+      nextDueDate = d.toISOString().split('T')[0];
+    } else {
+      nextDueDate = null;
+    }
+    
+    await db.execute('UPDATE installments SET currentInstallment = $1, nextDueDate = $2, isCompleted = $3 WHERE id = $4', 
+      [newCurrentInstall, nextDueDate, newCurrentInstall >= inst.totalTenorMonths ? 1 : 0, installmentId]);
+
+    await db.execute('COMMIT');
+  } catch (err) {
+    await db.execute('ROLLBACK');
+    throw err;
+  }
+}
+
 export async function resetAllDataToDefault() {
-  await db.transaction('rw', [
-    db.accounts,
-    db.categories,
-    db.transactions,
-    db.budgets,
-    db.savingsGoals,
-    db.savingsLogs,
-    db.recurringTransactions,
-    db.installments,
-  ], async () => {
-    await db.accounts.clear();
-    await db.categories.clear();
-    await db.transactions.clear();
-    await db.budgets.clear();
-    await db.savingsGoals.clear();
-    await db.savingsLogs.clear();
-    await db.recurringTransactions.clear();
-    await db.installments.clear();
-
-    await db.accounts.bulkAdd(DEFAULT_ACCOUNTS);
-    await db.categories.bulkAdd(DEFAULT_CATEGORIES);
-  });
+  const db = await getDb();
+  await db.execute('BEGIN TRANSACTION');
+  try {
+    await db.execute('DELETE FROM transactions');
+    await db.execute('DELETE FROM budgets');
+    await db.execute('DELETE FROM savingsGoals');
+    await db.execute('DELETE FROM savingsLogs');
+    await db.execute('DELETE FROM recurringTransactions');
+    await db.execute('DELETE FROM installments');
+    await db.execute('DELETE FROM accounts');
+    await db.execute('DELETE FROM categories');
+    await db.execute('COMMIT');
+    
+    // Re-initialize
+    await initializeDatabase();
+  } catch (err) {
+    await db.execute('ROLLBACK');
+    throw err;
+  }
 }
 
-// Ekspor & Impor Seluruh Data JSON
-export async function exportDatabaseBackup() {
-  const accounts = await db.accounts.toArray();
-  const categories = await db.categories.toArray();
-  const transactions = await db.transactions.toArray();
-  const budgets = await db.budgets.toArray();
-  const savingsGoals = await db.savingsGoals.toArray();
-  const savingsLogs = await db.savingsLogs.toArray();
-  const recurringTransactions = await db.recurringTransactions.toArray();
-  const installments = await db.installments.toArray();
-
-  return {
+export async function exportDatabaseBackup(): Promise<string> {
+  const accounts = await getAccounts();
+  const categories = await getCategories();
+  const transactions = await getTransactions();
+  const budgets = await getBudgets();
+  const savingsGoals = await getSavingsGoals();
+  const savingsLogs = await getSavingsLogs();
+  const recurringTransactions = await getRecurringTransactions();
+  const installments = await getInstallments();
+  
+  const backup = {
     version: 1,
-    exportDate: new Date().toISOString(),
+    timestamp: new Date().toISOString(),
     data: {
       accounts,
       categories,
@@ -395,153 +532,92 @@ export async function exportDatabaseBackup() {
       savingsGoals,
       savingsLogs,
       recurringTransactions,
-      installments,
-    },
+      installments
+    }
   };
+  return JSON.stringify(backup, null, 2);
 }
 
-export function validateBackupData(backupJson: any): void {
-  if (!backupJson || typeof backupJson !== 'object') {
-    throw new Error('File backup bukan merupakan objek JSON yang valid.');
-  }
-  if (!backupJson.data || typeof backupJson.data !== 'object') {
-    throw new Error('Format file backup tidak valid: properti "data" tidak ditemukan.');
-  }
-
-  const { accounts, categories, transactions, budgets, savingsGoals, savingsLogs, recurringTransactions, installments } = backupJson.data;
-
-  if (!accounts && !categories && !transactions && !budgets && !savingsGoals && !installments) {
-    throw new Error('Data cadangan kosong atau tidak memiliki tabel esensial yang dikenali.');
-  }
-
-  if (accounts !== undefined) {
-    if (!Array.isArray(accounts)) throw new Error('Format data "accounts" harus berupa array.');
-    for (let i = 0; i < accounts.length; i++) {
-      const a = accounts[i];
-      if (!a || typeof a !== 'object' || !a.id || typeof a.name !== 'string' || typeof a.balance !== 'number') {
-        throw new Error(`Data akun pada baris ke-${i + 1} tidak valid (membutuhkan id, name, dan balance).`);
+export async function importDatabaseBackup(jsonData: string): Promise<void> {
+  try {
+    const backup = JSON.parse(jsonData);
+    if (!backup.data || !backup.data.accounts) throw new Error('Format JSON tidak valid');
+    
+    await resetAllDataToDefault(); // Clean current
+    const db = await getDb();
+    
+    await db.execute('BEGIN TRANSACTION');
+    try {
+      // Clear auto-seeded data
+      await db.execute('DELETE FROM accounts');
+      await db.execute('DELETE FROM categories');
+      
+      for (const a of backup.data.accounts) {
+        await db.execute(`INSERT INTO accounts (id, name, type, balance, icon, color, isDefault, accountNumber, createdAt) 
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`, 
+          [a.id, a.name, a.type, a.balance, a.icon, a.color, a.isDefault ? 1 : 0, a.accountNumber || null,  a.createdAt || new Date().toISOString()]);
       }
-    }
-  }
-
-  if (categories !== undefined) {
-    if (!Array.isArray(categories)) throw new Error('Format data "categories" harus berupa array.');
-    for (let i = 0; i < categories.length; i++) {
-      const c = categories[i];
-      if (!c || typeof c !== 'object' || !c.id || typeof c.name !== 'string' || typeof c.type !== 'string') {
-        throw new Error(`Data kategori pada baris ke-${i + 1} tidak valid (membutuhkan id, name, dan type).`);
+      
+      for (const c of backup.data.categories) {
+        await db.execute(`INSERT INTO categories (id, name, type, icon, color, parentId, isDefault) 
+          VALUES ($1, $2, $3, $4, $5, $6, $7)`, 
+          [c.id, c.name, c.type, c.icon, c.color, c.parentId || null, c.isDefault ? 1 : 0]);
       }
-    }
-  }
-
-  if (transactions !== undefined) {
-    if (!Array.isArray(transactions)) throw new Error('Format data "transactions" harus berupa array.');
-    for (let i = 0; i < transactions.length; i++) {
-      const t = transactions[i];
-      if (!t || typeof t !== 'object' || !t.id || !t.accountId || typeof t.amount !== 'number' || typeof t.type !== 'string' || !t.date) {
-        throw new Error(`Data transaksi pada baris ke-${i + 1} tidak valid.`);
+      
+      if (backup.data.transactions) {
+        for (const t of backup.data.transactions) {
+          await db.execute(`INSERT INTO transactions (id, accountId, toAccountId, categoryId, amount, type, date, notes, isRecurring, goalId, adminFee, createdAt)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`, 
+            [t.id, t.accountId, t.toAccountId || null, t.categoryId, t.amount, t.type, t.date, t.notes || null, t.isRecurring ? 1 : 0, t.goalId || null, t.adminFee || 0, t.createdAt || new Date().toISOString()]);
+        }
       }
-    }
-  }
-
-  if (budgets !== undefined) {
-    if (!Array.isArray(budgets)) throw new Error('Format data "budgets" harus berupa array.');
-    for (let i = 0; i < budgets.length; i++) {
-      const b = budgets[i];
-      if (!b || typeof b !== 'object' || !b.id || !b.categoryId || !b.period || typeof b.amountLimit !== 'number') {
-        throw new Error(`Data anggaran pada baris ke-${i + 1} tidak valid.`);
+      
+      if (backup.data.budgets) {
+        for (const b of backup.data.budgets) {
+          await db.execute(`INSERT INTO budgets (id, categoryId, amountLimit, period, alertThreshold, createdAt)
+            VALUES ($1, $2, $3, $4, $5, $6)`, 
+            [b.id, b.categoryId, b.amountLimit, b.period, b.alertThreshold || null, b.createdAt || new Date().toISOString()]);
+        }
       }
-    }
-  }
-
-  if (savingsGoals !== undefined) {
-    if (!Array.isArray(savingsGoals)) throw new Error('Format data "savingsGoals" harus berupa array.');
-    for (let i = 0; i < savingsGoals.length; i++) {
-      const g = savingsGoals[i];
-      if (!g || typeof g !== 'object' || !g.id || typeof g.name !== 'string' || typeof g.targetAmount !== 'number' || typeof g.currentAmount !== 'number') {
-        throw new Error(`Data target tabungan pada baris ke-${i + 1} tidak valid.`);
+      
+      if (backup.data.savingsGoals) {
+        for (const s of backup.data.savingsGoals) {
+          await db.execute(`INSERT INTO savingsGoals (id, name, targetAmount, currentAmount, targetDate, icon, color, isCompleted, createdAt)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`, 
+            [s.id, s.name, s.targetAmount, s.currentAmount, s.targetDate || null, s.icon || null, s.color || null, s.isCompleted ? 1 : 0, s.createdAt || new Date().toISOString()]);
+        }
       }
-    }
-  }
-
-  if (savingsLogs !== undefined) {
-    if (!Array.isArray(savingsLogs)) throw new Error('Format data "savingsLogs" harus berupa array.');
-    for (let i = 0; i < savingsLogs.length; i++) {
-      const l = savingsLogs[i];
-      if (!l || typeof l !== 'object' || !l.id || !l.goalId || !l.accountId || typeof l.amount !== 'number') {
-        throw new Error(`Data riwayat tabungan pada baris ke-${i + 1} tidak valid.`);
+      
+      if (backup.data.savingsLogs) {
+        for (const l of backup.data.savingsLogs) {
+          await db.execute(`INSERT INTO savingsLogs (id, goalId, accountId, amount, date, notes, createdAt)
+            VALUES ($1, $2, $3, $4, $5, $6, $7)`, 
+            [l.id, l.goalId, l.accountId, l.amount, l.date, l.notes || null, l.createdAt || new Date().toISOString()]);
+        }
       }
-    }
-  }
-
-  if (recurringTransactions !== undefined) {
-    if (!Array.isArray(recurringTransactions)) throw new Error('Format data "recurringTransactions" harus berupa array.');
-    for (let i = 0; i < recurringTransactions.length; i++) {
-      const r = recurringTransactions[i];
-      if (!r || typeof r !== 'object' || !r.id || typeof r.title !== 'string' || typeof r.amount !== 'number' || !r.accountId) {
-        throw new Error(`Data transaksi rutin pada baris ke-${i + 1} tidak valid.`);
+      
+      if (backup.data.recurringTransactions) {
+        for (const r of backup.data.recurringTransactions) {
+          await db.execute(`INSERT INTO recurringTransactions (id, title, amount, type, categoryId, accountId, toAccountId, frequency, dayOfMonth, nextDueDate, notes, isActive, autoCreate, createdAt)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`, 
+            [r.id, r.title, r.amount, r.type, r.categoryId, r.accountId, r.toAccountId || null, r.frequency, r.dayOfMonth || null, r.nextDueDate || null, r.notes || null, r.isActive ? 1 : 0, r.autoCreate ? 1 : 0, r.createdAt || new Date().toISOString()]);
+        }
       }
-    }
-  }
-
-  if (installments !== undefined) {
-    if (!Array.isArray(installments)) throw new Error('Format data "installments" harus berupa array.');
-    for (let i = 0; i < installments.length; i++) {
-      const ins = installments[i];
-      if (!ins || typeof ins !== 'object' || !ins.id || typeof ins.title !== 'string' || typeof ins.monthlyAmount !== 'number' || !ins.accountId) {
-        throw new Error(`Data cicilan pada baris ke-${i + 1} tidak valid.`);
+      
+      if (backup.data.installments) {
+        for (const i of backup.data.installments) {
+          await db.execute(`INSERT INTO installments (id, type, title, totalAmount, monthlyAmount, totalTenorMonths, currentInstallment, dueDayOfMonth, nextDueDate, accountId, notes, isCompleted, createdAt)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`, 
+            [i.id, i.type, i.title, i.totalAmount || null, i.monthlyAmount, i.totalTenorMonths, i.currentInstallment, i.dueDayOfMonth, i.nextDueDate || null, i.accountId, i.notes || null, i.isCompleted ? 1 : 0, i.createdAt || new Date().toISOString()]);
+        }
       }
+
+      await db.execute('COMMIT');
+    } catch (e) {
+      await db.execute('ROLLBACK');
+      throw e;
     }
+  } catch (error) {
+    throw new Error('Gagal mengimpor data. Pastikan file JSON valid.');
   }
-}
-
-export async function importDatabaseBackup(backupJson: any) {
-  // Validasi skema sebelum menyentuh database sama sekali (mencegah data wipe jika file korup)
-  validateBackupData(backupJson);
-
-  const { accounts, categories, transactions, budgets, savingsGoals, savingsLogs, recurringTransactions, installments } = backupJson.data;
-
-  await db.transaction('rw', [
-    db.accounts,
-    db.categories,
-    db.transactions,
-    db.budgets,
-    db.savingsGoals,
-    db.savingsLogs,
-    db.recurringTransactions,
-    db.installments,
-  ], async () => {
-    if (accounts) {
-      await db.accounts.clear();
-      await db.accounts.bulkAdd(accounts);
-    }
-    if (categories) {
-      await db.categories.clear();
-      await db.categories.bulkAdd(categories);
-    }
-    if (transactions) {
-      await db.transactions.clear();
-      await db.transactions.bulkAdd(transactions);
-    }
-    if (budgets) {
-      await db.budgets.clear();
-      await db.budgets.bulkAdd(budgets);
-    }
-    if (savingsGoals) {
-      await db.savingsGoals.clear();
-      await db.savingsGoals.bulkAdd(savingsGoals);
-    }
-    if (savingsLogs) {
-      await db.savingsLogs.clear();
-      await db.savingsLogs.bulkAdd(savingsLogs);
-    }
-    if (recurringTransactions) {
-      await db.recurringTransactions.clear();
-      await db.recurringTransactions.bulkAdd(recurringTransactions);
-    }
-    if (installments) {
-      await db.installments.clear();
-      await db.installments.bulkAdd(installments);
-    }
-  });
 }

@@ -1,17 +1,24 @@
-import { useEffect, useState } from 'react';
-import { useLiveQuery } from 'dexie-react-hooks';
+import { useEffect, useState, useCallback } from 'react';
 import {
-  db,
   initializeDatabase,
-  createTransaction,
-  deleteTransaction,
-  updateTransaction,
-  depositSavingsGoal,
-  withdrawSavingsGoal,
-  payInstallment,
-  resetAllDataToDefault,
+  getAccounts,
+  getCategories,
+  getTransactions,
+  getBudgets,
+  getSavingsGoals,
+  getSavingsLogs,
+  getRecurringTransactions,
+  getInstallments,
+  createTransaction as dbCreateTransaction,
+  deleteTransaction as dbDeleteTransaction,
+  updateTransaction as dbUpdateTransaction,
+  depositSavingsGoal as dbDepositSavingsGoal,
+  withdrawSavingsGoal as dbWithdrawSavingsGoal,
+  payInstallment as dbPayInstallment,
+  resetAllDataToDefault as dbResetAll,
   exportDatabaseBackup,
-  importDatabaseBackup,
+  importDatabaseBackup as dbImportBackup,
+  executeUpdate,
 } from '@/lib/db';
 import {
   Account,
@@ -22,40 +29,61 @@ import {
   RecurringTransaction,
   Installment,
   FinancialSummary,
+  SavingsLog,
 } from '@/types';
 import { getCurrentPeriod, generateId } from '@/lib/utils';
 
 export function useBudgetStore() {
   const [isInitialized, setIsInitialized] = useState(false);
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [transactions, setTransactions] = useState<Transaction[]>([]);
+  const [budgets, setBudgets] = useState<Budget[]>([]);
+  const [savingsGoals, setSavingsGoals] = useState<SavingsGoal[]>([]);
+  const [savingsLogs, setSavingsLogs] = useState<SavingsLog[]>([]);
+  const [recurringTransactions, setRecurringTransactions] = useState<RecurringTransaction[]>([]);
+  const [installments, setInstallments] = useState<Installment[]>([]);
+
+  const refreshData = useCallback(async () => {
+    try {
+      const [accs, cats, txs, buds, goals, logs, recs, insts] = await Promise.all([
+        getAccounts(),
+        getCategories(),
+        getTransactions(),
+        getBudgets(),
+        getSavingsGoals(),
+        getSavingsLogs(),
+        getRecurringTransactions(),
+        getInstallments(),
+      ]);
+      setAccounts(accs);
+      setCategories(cats);
+      setTransactions(txs);
+      setBudgets(buds);
+      setSavingsGoals(goals);
+      setSavingsLogs(logs);
+      setRecurringTransactions(recs);
+      setInstallments(insts);
+    } catch (error) {
+      console.error('Failed to fetch data from SQLite:', error);
+    }
+  }, []);
 
   useEffect(() => {
     initializeDatabase()
-      .then(() => setIsInitialized(true))
+      .then(() => {
+        setIsInitialized(true);
+        refreshData();
+      })
       .catch((err) => {
         console.error('Failed to initialize database:', err);
         setIsInitialized(true);
       });
-  }, []);
+  }, [refreshData]);
 
-  const accounts = useLiveQuery(() => db.accounts.toArray(), []) || [];
-  const categories = useLiveQuery(() => db.categories.toArray(), []) || [];
-  const transactions =
-    useLiveQuery(
-      () => db.transactions.reverse().sortBy('date'),
-      []
-    ) || [];
-  const budgets = useLiveQuery(() => db.budgets.toArray(), []) || [];
-  const savingsGoals = useLiveQuery(() => db.savingsGoals.toArray(), []) || [];
-  const savingsLogs = useLiveQuery(() => db.savingsLogs.toArray(), []) || [];
-  const recurringTransactions =
-    useLiveQuery(() => db.recurringTransactions.toArray(), []) || [];
-  const installments =
-    useLiveQuery(() => db.installments.toArray(), []) || [];
-
-  // Hitung ringkasan finansial (Total Saldo, Pemasukan, Pengeluaran Bulan Ini)
-  const calculateSummary = (period: string = getCurrentPeriod()): FinancialSummary => {
+  // Hitung ringkasan finansial
+  const calculateSummary = useCallback((period: string = getCurrentPeriod()): FinancialSummary => {
     const totalBalance = accounts.reduce((sum, acc) => sum + (acc.balance || 0), 0);
-
     const monthTransactions = transactions.filter((t) => t.date.startsWith(period));
 
     let totalIncome = 0;
@@ -93,139 +121,251 @@ export function useBudgetStore() {
       netSavings: totalIncome - totalExpense,
       expenseByCategory,
     };
-  };
+  }, [accounts, transactions, categories]);
 
-  // Helper untuk mendapatkan pengeluaran aktual per kategori untuk budget
-  const getCategorySpending = (categoryId: string, period: string = getCurrentPeriod()): number => {
+  const getCategorySpending = useCallback((categoryId: string, period: string = getCurrentPeriod()): number => {
     return transactions
       .filter((t) => t.categoryId === categoryId && t.type === 'expense' && t.date.startsWith(period))
       .reduce((sum, t) => sum + t.amount, 0);
-  };
+  }, [transactions]);
 
   // Akun Actions
   const addAccount = async (account: Omit<Account, 'id' | 'createdAt'>) => {
     const id = generateId();
-    await db.accounts.add({
-      ...account,
-      id,
-      createdAt: new Date().toISOString(),
-    });
+    await executeUpdate(
+      `INSERT INTO accounts (id, name, type, balance, icon, color, isDefault, accountNumber, createdAt) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+      [
+        id, account.name, account.type, account.balance, account.icon, account.color, account.isDefault ? 1 : 0,
+        account.accountNumber || null, new Date().toISOString()
+      ]
+    );
+    await refreshData();
     return id;
   };
 
   const updateAccount = async (id: string, updates: Partial<Account>) => {
-    await db.accounts.update(id, updates);
+    const fields = Object.keys(updates).filter(k => k !== 'id' && k !== 'createdAt');
+    if (fields.length > 0) {
+      const setClause = fields.map((f, i) => `${f} = $${i + 1}`).join(', ');
+      const values = fields.map(f => (updates as any)[f]);
+      values.push(id);
+      
+      if ('isDefault' in updates) {
+        const idx = fields.indexOf('isDefault');
+        values[idx] = updates.isDefault ? 1 : 0;
+      }
+      await executeUpdate(`UPDATE accounts SET ${setClause} WHERE id = $${values.length}`, values);
+      await refreshData();
+    }
   };
 
   const deleteAccount = async (id: string) => {
-    const count = await db.transactions.where('accountId').equals(id).count();
+    const count = transactions.filter(t => t.accountId === id || t.toAccountId === id).length;
     if (count > 0) {
       throw new Error(`Tidak bisa menghapus akun karena memiliki ${count} riwayat transaksi.`);
     }
-    await db.accounts.delete(id);
+    await executeUpdate(`DELETE FROM accounts WHERE id = $1`, [id]);
+    await refreshData();
   };
 
   // Kategori Actions
   const addCategory = async (category: Omit<Category, 'id'>) => {
     const id = generateId();
-    await db.categories.add({ ...category, id });
+    await executeUpdate(
+      `INSERT INTO categories (id, name, type, icon, color, parentId, isDefault) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [id, category.name, category.type, category.icon, category.color, category.parentId || null, category.isDefault ? 1 : 0]
+    );
+    await refreshData();
     return id;
   };
 
   const updateCategory = async (id: string, updates: Partial<Category>) => {
-    await db.categories.update(id, updates);
+    const fields = Object.keys(updates).filter(k => k !== 'id');
+    if (fields.length > 0) {
+      const setClause = fields.map((f, i) => `${f} = $${i + 1}`).join(', ');
+      const values = fields.map(f => (updates as any)[f]);
+      values.push(id);
+      if ('isDefault' in updates) {
+        const idx = fields.indexOf('isDefault');
+        values[idx] = updates.isDefault ? 1 : 0;
+      }
+      await executeUpdate(`UPDATE categories SET ${setClause} WHERE id = $${values.length}`, values);
+      await refreshData();
+    }
   };
 
   const deleteCategory = async (id: string) => {
-    const count = await db.transactions.where('categoryId').equals(id).count();
+    const count = transactions.filter(t => t.categoryId === id).length;
     if (count > 0) {
       throw new Error(`Kategori tidak dapat dihapus karena telah digunakan pada ${count} transaksi.`);
     }
-    await db.categories.delete(id);
+    await executeUpdate(`DELETE FROM categories WHERE id = $1`, [id]);
+    await refreshData();
   };
 
   // Budget Actions
   const setBudget = async (categoryId: string, amountLimit: number, period: string = getCurrentPeriod()) => {
-    const existing = await db.budgets.where({ categoryId, period }).first();
+    const existing = budgets.find(b => b.categoryId === categoryId && b.period === period);
     if (existing) {
-      await db.budgets.update(existing.id, { amountLimit });
+      await executeUpdate(`UPDATE budgets SET amountLimit = $1 WHERE id = $2`, [amountLimit, existing.id]);
     } else {
-      await db.budgets.add({
-        id: generateId(),
-        categoryId,
-        period,
-        amountLimit,
-        createdAt: new Date().toISOString(),
-      });
+      await executeUpdate(
+        `INSERT INTO budgets (id, categoryId, amountLimit, period, alertThreshold, createdAt) VALUES ($1, $2, $3, $4, $5, $6)`,
+        [generateId(), categoryId, amountLimit, period, null, new Date().toISOString()]
+      );
     }
+    await refreshData();
   };
 
   const deleteBudget = async (id: string) => {
-    await db.budgets.delete(id);
+    await executeUpdate(`DELETE FROM budgets WHERE id = $1`, [id]);
+    await refreshData();
   };
 
   // Savings Goal Actions
   const addSavingsGoal = async (goal: Omit<SavingsGoal, 'id' | 'currentAmount' | 'isCompleted' | 'createdAt'>) => {
     const id = generateId();
-    await db.savingsGoals.add({
-      ...goal,
-      id,
-      currentAmount: 0,
-      isCompleted: false,
-      createdAt: new Date().toISOString(),
-    });
+    await executeUpdate(
+      `INSERT INTO savingsGoals (id, name, targetAmount, currentAmount, targetDate, icon, color, isCompleted, createdAt)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+      [id, goal.name, goal.targetAmount, 0, goal.targetDate || null, goal.icon || null, goal.color || null, 0, new Date().toISOString()]
+    );
+    await refreshData();
     return id;
   };
 
   const updateSavingsGoal = async (id: string, updates: Partial<SavingsGoal>) => {
-    await db.savingsGoals.update(id, updates);
+    const fields = Object.keys(updates).filter(k => k !== 'id' && k !== 'createdAt');
+    if (fields.length > 0) {
+      const setClause = fields.map((f, i) => `${f} = $${i + 1}`).join(', ');
+      const values = fields.map(f => (updates as any)[f]);
+      values.push(id);
+      if ('isCompleted' in updates) {
+        const idx = fields.indexOf('isCompleted');
+        values[idx] = updates.isCompleted ? 1 : 0;
+      }
+      await executeUpdate(`UPDATE savingsGoals SET ${setClause} WHERE id = $${values.length}`, values);
+      await refreshData();
+    }
   };
 
   const deleteSavingsGoal = async (id: string) => {
-    await db.savingsGoals.delete(id);
-    await db.savingsLogs.where('goalId').equals(id).delete();
+    await executeUpdate(`DELETE FROM savingsGoals WHERE id = $1`, [id]);
+    await executeUpdate(`DELETE FROM savingsLogs WHERE goalId = $1`, [id]);
+    await refreshData();
   };
 
   // Recurring Transactions Actions
   const addRecurring = async (rec: Omit<RecurringTransaction, 'id' | 'createdAt'>) => {
     const id = generateId();
-    await db.recurringTransactions.add({
-      ...rec,
-      id,
-      createdAt: new Date().toISOString(),
-    });
+    await executeUpdate(
+      `INSERT INTO recurringTransactions (id, title, amount, type, categoryId, accountId, toAccountId, frequency, dayOfMonth, nextDueDate, notes, isActive, autoCreate, createdAt)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+      [id, rec.title, rec.amount, rec.type, rec.categoryId, rec.accountId, rec.toAccountId || null, rec.frequency, rec.dayOfMonth || null, rec.nextDueDate || null, rec.notes || null, rec.isActive ? 1 : 0, rec.autoCreate ? 1 : 0, new Date().toISOString()]
+    );
+    await refreshData();
     return id;
   };
 
   const toggleRecurringActive = async (id: string, isActive: boolean) => {
-    await db.recurringTransactions.update(id, { isActive });
+    await executeUpdate(`UPDATE recurringTransactions SET isActive = $1 WHERE id = $2`, [isActive ? 1 : 0, id]);
+    await refreshData();
   };
 
   const updateRecurring = async (id: string, updates: Partial<RecurringTransaction>) => {
-    await db.recurringTransactions.update(id, updates);
+    const fields = Object.keys(updates).filter(k => k !== 'id' && k !== 'createdAt');
+    if (fields.length > 0) {
+      const setClause = fields.map((f, i) => `${f} = $${i + 1}`).join(', ');
+      const values = fields.map(f => (updates as any)[f]);
+      values.push(id);
+      if ('isActive' in updates) {
+        const idx = fields.indexOf('isActive');
+        values[idx] = updates.isActive ? 1 : 0;
+      }
+      await executeUpdate(`UPDATE recurringTransactions SET ${setClause} WHERE id = $${values.length}`, values);
+      await refreshData();
+    }
   };
 
   const deleteRecurring = async (id: string) => {
-    await db.recurringTransactions.delete(id);
+    await executeUpdate(`DELETE FROM recurringTransactions WHERE id = $1`, [id]);
+    await refreshData();
   };
 
-  // Installment (Cicilan SPayLater & SPinjam) Actions
+  // Installment Actions
   const addInstallment = async (installment: Omit<Installment, 'id' | 'createdAt'>) => {
     const id = generateId();
-    await db.installments.add({
-      ...installment,
-      id,
-      createdAt: new Date().toISOString(),
-    });
+    await executeUpdate(
+      `INSERT INTO installments (id, type, title, totalAmount, monthlyAmount, totalTenorMonths, currentInstallment, dueDayOfMonth, nextDueDate, accountId, notes, isCompleted, createdAt)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+      [id, installment.type, installment.title, installment.totalAmount || null, installment.monthlyAmount, installment.totalTenorMonths, installment.currentInstallment, installment.dueDayOfMonth, installment.nextDueDate || null, installment.accountId, installment.notes || null, installment.isCompleted ? 1 : 0, new Date().toISOString()]
+    );
+    await refreshData();
     return id;
   };
 
   const updateInstallment = async (id: string, updates: Partial<Installment>) => {
-    await db.installments.update(id, updates);
+    const fields = Object.keys(updates).filter(k => k !== 'id' && k !== 'createdAt');
+    if (fields.length > 0) {
+      const setClause = fields.map((f, i) => `${f} = $${i + 1}`).join(', ');
+      const values = fields.map(f => (updates as any)[f]);
+      values.push(id);
+      if ('isCompleted' in updates) {
+        const idx = fields.indexOf('isCompleted');
+        values[idx] = updates.isCompleted ? 1 : 0;
+      }
+      await executeUpdate(`UPDATE installments SET ${setClause} WHERE id = $${values.length}`, values);
+      await refreshData();
+    }
   };
 
   const deleteInstallment = async (id: string) => {
-    await db.installments.delete(id);
+    await executeUpdate(`DELETE FROM installments WHERE id = $1`, [id]);
+    await refreshData();
+  };
+
+  // Wrappers that refresh data after atomic DB operations
+  const createTransaction = async (tx: Omit<Transaction, 'id' | 'createdAt'>) => {
+    const id = await dbCreateTransaction(tx);
+    await refreshData();
+    return id;
+  };
+
+  const deleteTransaction = async (id: string) => {
+    await dbDeleteTransaction(id);
+    await refreshData();
+  };
+
+  const updateTransaction = async (id: string, updates: Partial<Transaction>) => {
+    await dbUpdateTransaction(id, updates);
+    await refreshData();
+  };
+
+  const depositSavingsGoal = async (goalId: string, accountId: string, amount: number, date: string, notes?: string) => {
+    await dbDepositSavingsGoal(goalId, accountId, amount, date, notes);
+    await refreshData();
+  };
+
+  const withdrawSavingsGoal = async (goalId: string, accountId: string, amount: number, date: string, notes?: string) => {
+    await dbWithdrawSavingsGoal(goalId, accountId, amount, date, notes);
+    await refreshData();
+  };
+
+  const payInstallment = async (installmentId: string, date: string) => {
+    await dbPayInstallment(installmentId, date);
+    await refreshData();
+  };
+
+  const resetAllDataToDefault = async () => {
+    await dbResetAll();
+    await refreshData();
+  };
+
+  const importDatabaseBackup = async (jsonData: string) => {
+    await dbImportBackup(jsonData);
+    await refreshData();
   };
 
   return {

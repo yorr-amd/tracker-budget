@@ -170,7 +170,7 @@ export const SettingsView: React.FC = () => {
   const handleExportJSON = async () => {
     try {
       const backupData = await exportDatabaseBackup();
-      exportDataToJSON(backupData, 'tracker_budget_desktop_backup');
+      exportDataToJSON(JSON.parse(backupData), 'tracker_budget_desktop_backup');
       toast.success('File backup JSON berhasil diunduh ke komputer Anda!', 'Backup Berhasil');
     } catch (err: any) {
       toast.error('Gagal mengekspor data: ' + err.message, 'Ekspor Gagal');
@@ -198,7 +198,7 @@ export const SettingsView: React.FC = () => {
   const handleConfirmImport = async () => {
     if (!pendingImportData) return;
     try {
-      await importDatabaseBackup(pendingImportData);
+      await importDatabaseBackup(JSON.stringify(pendingImportData));
       toast.success('Seluruh data cadangan berhasil dipulihkan!', 'Restore Berhasil');
     } catch (err: any) {
       toast.error('Gagal memulihkan database: ' + err.message, 'Gagal Restore');
@@ -374,6 +374,8 @@ export const SettingsView: React.FC = () => {
               </p>
             </div>
 
+
+
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               {/* Light Mode */}
               <button
@@ -447,7 +449,20 @@ export const SettingsView: React.FC = () => {
 
       {/* TAB 3: Backup & Restore */}
       {activeTab === 'backup' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="space-y-6">
+          <Card className="p-4 bg-emerald-50 dark:bg-emerald-950/20 border-emerald-100 dark:border-emerald-900/50 flex items-start gap-4 rounded-2xl">
+            <div className="bg-emerald-100 dark:bg-emerald-900 p-2 rounded-lg">
+              <HardDrive className="w-5 h-5 text-emerald-700 dark:text-emerald-400" />
+            </div>
+            <div>
+              <h3 className="text-sm font-bold text-emerald-800 dark:text-emerald-300">Penyimpanan Aktif: Native SQLite</h3>
+              <p className="text-xs text-emerald-600 dark:text-emerald-500 mt-1">
+                Data Anda tersimpan secara aman dan permanen dalam file fisik <code>tracker_budget.db</code> di komputer Anda. Data ini tidak akan terhapus meskipun cache browser dibersihkan. Anda juga dapat menggunakan opsi Ekspor JSON di bawah untuk fleksibilitas.
+              </p>
+            </div>
+          </Card>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <Card className="space-y-4">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
@@ -501,6 +516,7 @@ export const SettingsView: React.FC = () => {
               Reset Semua Data
             </Button>
           </Card>
+        </div>
         </div>
       )}
 

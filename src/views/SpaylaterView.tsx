@@ -53,7 +53,7 @@ export const SpaylaterView: React.FC = () => {
   const handlePayNow = async (inst: Installment) => {
     setPayingId(inst.id);
     try {
-      await payInstallment(inst.id);
+      await payInstallment(inst.id, new Date().toISOString().split('T')[0]);
       const isFinishing = inst.currentInstallment >= inst.totalTenorMonths;
       toast.success(
         isFinishing
