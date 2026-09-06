@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Modal } from '../ui/Modal';
 import { Button } from '../ui/Button';
 import { Input } from '../ui/Input';
@@ -52,7 +52,7 @@ export const InstallmentModal: React.FC<InstallmentModalProps> = ({
       setTitle('');
       setMonthlyAmount(100000);
       setTotalTenorMonths(3);
-      setCurrentInstallment(1);
+      setCurrentInstallment(0);
       setTotalAmount(300000);
       setDueDayOfMonth(5);
       setNextDueDate(getTodayDateString());
@@ -97,8 +97,8 @@ export const InstallmentModal: React.FC<InstallmentModalProps> = ({
       setError('Tenor cicilan minimal 1 bulan.');
       return;
     }
-    if (currentInstallment < 1 || currentInstallment > totalTenorMonths) {
-      setError(`Cicilan saat ini harus berada di antara 1 dan ${totalTenorMonths}.`);
+    if (currentInstallment < 0 || currentInstallment > totalTenorMonths) {
+      setError(`Cicilan saat ini harus berada di antara 0 dan ${totalTenorMonths}.`);
       return;
     }
     if (dueDayOfMonth < 1 || dueDayOfMonth > 31) {

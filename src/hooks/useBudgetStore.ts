@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useSyncExternalStore, useCallback } from 'react';
 import {
   initializeDatabase,
   getAccounts,
@@ -33,58 +33,85 @@ import {
 } from '@/types';
 import { getCurrentPeriod, generateId } from '@/lib/utils';
 
+// Global state for Singleton store
+let globalState = {
+  isInitialized: false,
+  accounts: [] as Account[],
+  categories: [] as Category[],
+  transactions: [] as Transaction[],
+  budgets: [] as Budget[],
+  savingsGoals: [] as SavingsGoal[],
+  savingsLogs: [] as SavingsLog[],
+  recurringTransactions: [] as RecurringTransaction[],
+  installments: [] as Installment[],
+};
+
+const listeners = new Set<() => void>();
+
+function emitChange() {
+  globalState = { ...globalState };
+  listeners.forEach((listener) => listener());
+}
+
+let isFetching = false;
+async function refreshData() {
+  if (isFetching) return;
+  isFetching = true;
+  try {
+    const [accs, cats, txs, buds, goals, logs, recs, insts] = await Promise.all([
+      getAccounts(),
+      getCategories(),
+      getTransactions(),
+      getBudgets(),
+      getSavingsGoals(),
+      getSavingsLogs(),
+      getRecurringTransactions(),
+      getInstallments(),
+    ]);
+    globalState = {
+      ...globalState,
+      accounts: accs,
+      categories: cats,
+      transactions: txs,
+      budgets: buds,
+      savingsGoals: goals,
+      savingsLogs: logs,
+      recurringTransactions: recs,
+      installments: insts,
+    };
+    emitChange();
+  } catch (error) {
+    console.error('Failed to fetch data from SQLite:', error);
+  } finally {
+    isFetching = false;
+  }
+}
+
+// Auto-initialize DB once on import
+initializeDatabase()
+  .then(() => {
+    globalState = { ...globalState, isInitialized: true };
+    emitChange();
+    refreshData();
+  })
+  .catch((err) => {
+    console.error('Failed to initialize database:', err);
+    globalState = { ...globalState, isInitialized: true };
+    emitChange();
+  });
+
 export function useBudgetStore() {
-  const [isInitialized, setIsInitialized] = useState(false);
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [budgets, setBudgets] = useState<Budget[]>([]);
-  const [savingsGoals, setSavingsGoals] = useState<SavingsGoal[]>([]);
-  const [savingsLogs, setSavingsLogs] = useState<SavingsLog[]>([]);
-  const [recurringTransactions, setRecurringTransactions] = useState<RecurringTransaction[]>([]);
-  const [installments, setInstallments] = useState<Installment[]>([]);
+  const state = useSyncExternalStore(
+    (listener) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    () => globalState
+  );
 
-  const refreshData = useCallback(async () => {
-    try {
-      const [accs, cats, txs, buds, goals, logs, recs, insts] = await Promise.all([
-        getAccounts(),
-        getCategories(),
-        getTransactions(),
-        getBudgets(),
-        getSavingsGoals(),
-        getSavingsLogs(),
-        getRecurringTransactions(),
-        getInstallments(),
-      ]);
-      setAccounts(accs);
-      setCategories(cats);
-      setTransactions(txs);
-      setBudgets(buds);
-      setSavingsGoals(goals);
-      setSavingsLogs(logs);
-      setRecurringTransactions(recs);
-      setInstallments(insts);
-    } catch (error) {
-      console.error('Failed to fetch data from SQLite:', error);
-    }
-  }, []);
-
-  useEffect(() => {
-    initializeDatabase()
-      .then(() => {
-        setIsInitialized(true);
-        refreshData();
-      })
-      .catch((err) => {
-        console.error('Failed to initialize database:', err);
-        setIsInitialized(true);
-      });
-  }, [refreshData]);
-
-  // Hitung ringkasan finansial
   const calculateSummary = useCallback((period: string = getCurrentPeriod()): FinancialSummary => {
-    const totalBalance = accounts.reduce((sum, acc) => sum + (acc.balance || 0), 0);
-    const monthTransactions = transactions.filter((t) => t.date.startsWith(period));
+    const totalBalance = state.accounts.reduce((sum, acc) => sum + (acc.balance || 0), 0);
+    const monthTransactions = state.transactions.filter((t) => t.date.startsWith(period));
 
     let totalIncome = 0;
     let totalExpense = 0;
@@ -102,7 +129,7 @@ export function useBudgetStore() {
 
     const expenseByCategory = Array.from(categorySpendingMap.entries())
       .map(([catId, amount]) => {
-        const cat = categories.find((c) => c.id === catId);
+        const cat = state.categories.find((c) => c.id === catId);
         return {
           categoryId: catId,
           categoryName: cat?.name || 'Lainnya',
@@ -121,20 +148,19 @@ export function useBudgetStore() {
       netSavings: totalIncome - totalExpense,
       expenseByCategory,
     };
-  }, [accounts, transactions, categories]);
+  }, [state.accounts, state.transactions, state.categories]);
 
   const getCategorySpending = useCallback((categoryId: string, period: string = getCurrentPeriod()): number => {
-    return transactions
+    return state.transactions
       .filter((t) => t.categoryId === categoryId && t.type === 'expense' && t.date.startsWith(period))
       .reduce((sum, t) => sum + t.amount, 0);
-  }, [transactions]);
+  }, [state.transactions]);
 
-  // Akun Actions
   const addAccount = async (account: Omit<Account, 'id' | 'createdAt'>) => {
     const id = generateId();
     await executeUpdate(
       `INSERT INTO accounts (id, name, type, balance, icon, color, isDefault, accountNumber, createdAt) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [
         id, account.name, account.type, account.balance, account.icon, account.color, account.isDefault ? 1 : 0,
         account.accountNumber || null, new Date().toISOString()
@@ -161,7 +187,7 @@ export function useBudgetStore() {
   };
 
   const deleteAccount = async (id: string) => {
-    const count = transactions.filter(t => t.accountId === id || t.toAccountId === id).length;
+    const count = state.transactions.filter(t => t.accountId === id || t.toAccountId === id).length;
     if (count > 0) {
       throw new Error(`Tidak bisa menghapus akun karena memiliki ${count} riwayat transaksi.`);
     }
@@ -169,7 +195,6 @@ export function useBudgetStore() {
     await refreshData();
   };
 
-  // Kategori Actions
   const addCategory = async (category: Omit<Category, 'id'>) => {
     const id = generateId();
     await executeUpdate(
@@ -197,7 +222,7 @@ export function useBudgetStore() {
   };
 
   const deleteCategory = async (id: string) => {
-    const count = transactions.filter(t => t.categoryId === id).length;
+    const count = state.transactions.filter(t => t.categoryId === id).length;
     if (count > 0) {
       throw new Error(`Kategori tidak dapat dihapus karena telah digunakan pada ${count} transaksi.`);
     }
@@ -205,9 +230,8 @@ export function useBudgetStore() {
     await refreshData();
   };
 
-  // Budget Actions
   const setBudget = async (categoryId: string, amountLimit: number, period: string = getCurrentPeriod()) => {
-    const existing = budgets.find(b => b.categoryId === categoryId && b.period === period);
+    const existing = state.budgets.find(b => b.categoryId === categoryId && b.period === period);
     if (existing) {
       await executeUpdate(`UPDATE budgets SET amountLimit = $1 WHERE id = $2`, [amountLimit, existing.id]);
     } else {
@@ -224,7 +248,6 @@ export function useBudgetStore() {
     await refreshData();
   };
 
-  // Savings Goal Actions
   const addSavingsGoal = async (goal: Omit<SavingsGoal, 'id' | 'currentAmount' | 'isCompleted' | 'createdAt'>) => {
     const id = generateId();
     await executeUpdate(
@@ -257,12 +280,11 @@ export function useBudgetStore() {
     await refreshData();
   };
 
-  // Recurring Transactions Actions
   const addRecurring = async (rec: Omit<RecurringTransaction, 'id' | 'createdAt'>) => {
     const id = generateId();
     await executeUpdate(
       `INSERT INTO recurringTransactions (id, title, amount, type, categoryId, accountId, toAccountId, frequency, dayOfMonth, nextDueDate, notes, isActive, autoCreate, createdAt)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
       [id, rec.title, rec.amount, rec.type, rec.categoryId, rec.accountId, rec.toAccountId || null, rec.frequency, rec.dayOfMonth || null, rec.nextDueDate || null, rec.notes || null, rec.isActive ? 1 : 0, rec.autoCreate ? 1 : 0, new Date().toISOString()]
     );
     await refreshData();
@@ -294,12 +316,11 @@ export function useBudgetStore() {
     await refreshData();
   };
 
-  // Installment Actions
   const addInstallment = async (installment: Omit<Installment, 'id' | 'createdAt'>) => {
     const id = generateId();
     await executeUpdate(
       `INSERT INTO installments (id, type, title, totalAmount, monthlyAmount, totalTenorMonths, currentInstallment, dueDayOfMonth, nextDueDate, accountId, notes, isCompleted, createdAt)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
       [id, installment.type, installment.title, installment.totalAmount || null, installment.monthlyAmount, installment.totalTenorMonths, installment.currentInstallment, installment.dueDayOfMonth, installment.nextDueDate || null, installment.accountId, installment.notes || null, installment.isCompleted ? 1 : 0, new Date().toISOString()]
     );
     await refreshData();
@@ -326,7 +347,6 @@ export function useBudgetStore() {
     await refreshData();
   };
 
-  // Wrappers that refresh data after atomic DB operations
   const createTransaction = async (tx: Omit<Transaction, 'id' | 'createdAt'>) => {
     const id = await dbCreateTransaction(tx);
     await refreshData();
@@ -369,15 +389,7 @@ export function useBudgetStore() {
   };
 
   return {
-    isInitialized,
-    accounts,
-    categories,
-    transactions,
-    budgets,
-    savingsGoals,
-    savingsLogs,
-    recurringTransactions,
-    installments,
+    ...state,
     calculateSummary,
     getCategorySpending,
     createTransaction,

@@ -254,10 +254,12 @@ export const ReportsView: React.FC = () => {
                       className={`px-4 py-3 text-right font-bold whitespace-nowrap ${
                         isIncome
                           ? 'text-emerald-600 dark:text-emerald-400'
+                          : tx.type === 'transfer'
+                          ? 'text-blue-600 dark:text-blue-400'
                           : 'text-zinc-900 dark:text-zinc-100'
                       }`}
                     >
-                      {isIncome ? '+' : '-'}
+                      {isIncome ? '+' : tx.type === 'transfer' ? '' : '-'}
                       {formatCurrency(tx.amount)}
                     </td>
                   </tr>

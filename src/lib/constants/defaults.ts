@@ -193,6 +193,31 @@ export const DEFAULT_CATEGORIES: Category[] = [
     color: '#F59E0B', // Amber
     isDefault: true,
   },
+  // -- Kategori Internal System --
+  {
+    id: 'cat_savings',
+    name: 'Tabungan',
+    type: 'expense',
+    icon: 'PiggyBank',
+    color: '#10B981',
+    isDefault: true,
+  },
+  {
+    id: 'cat_installments',
+    name: 'Cicilan',
+    type: 'expense',
+    icon: 'CreditCard',
+    color: '#6366F1',
+    isDefault: true,
+  },
+  {
+    id: 'cat_transfer',
+    name: 'Transfer',
+    type: 'expense',
+    icon: 'ArrowLeftRight',
+    color: '#3B82F6',
+    isDefault: true,
+  },
 ];
 
 export const ICON_OPTIONS = [

@@ -134,7 +134,7 @@ export const GoalsView: React.FC = () => {
                       </h3>
                       {goal.notes && (
                         <p className="text-xs text-zinc-500 italic mt-0.5">
-                          "{goal.notes}"
+                          &ldquo;{goal.notes}&rdquo;
                         </p>
                       )}
                     </div>

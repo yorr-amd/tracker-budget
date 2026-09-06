@@ -251,6 +251,7 @@ export const WalletsView: React.FC = () => {
       <TransactionModal
         isOpen={isTransferModalOpen}
         onClose={() => setIsTransferModalOpen(false)}
+        initialTransaction={{ type: 'transfer' } as any}
       />
 
       <ConfirmModal

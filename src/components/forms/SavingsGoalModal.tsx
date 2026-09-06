@@ -249,7 +249,7 @@ export const SavingsDepositModal: React.FC<SavingsDepositModalProps> = ({
 
     setIsSubmitting(true);
     try {
-      await depositSavingsGoal(goal.id, accountId, amount, notes);
+      await depositSavingsGoal(goal.id, accountId, amount, new Date().toISOString().split('T')[0], notes || undefined);
       
       // Jika setelah setoran target tercapai, trigger selebrasi confetti!
       if (goal.currentAmount + amount >= goal.targetAmount) {
@@ -387,7 +387,7 @@ export const SavingsWithdrawModal: React.FC<SavingsWithdrawModalProps> = ({
 
     setIsSubmitting(true);
     try {
-      await withdrawSavingsGoal(goal.id, accountId, amount, notes);
+      await withdrawSavingsGoal(goal.id, accountId, amount, new Date().toISOString().split('T')[0], notes || undefined);
       onClose();
     } catch (err: any) {
       setError(err.message || 'Gagal mencairkan tabungan');

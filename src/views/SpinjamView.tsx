@@ -1,4 +1,4 @@
-﻿import React, { useState } from 'react';
+import React, { useState } from 'react';
 import { Card } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Badge } from '@/components/ui/Badge';
@@ -39,7 +39,7 @@ export const SpinjamView: React.FC = () => {
 
   const totalMonthlyCommitment = activeItems.reduce((sum, i) => sum + i.monthlyAmount, 0);
   const totalRemainingDebt = activeItems.reduce(
-    (sum, i) => sum + Math.max(0, i.totalTenorMonths - i.currentInstallment + 1) * i.monthlyAmount,
+    (sum, i) => sum + Math.max(0, i.totalTenorMonths - i.currentInstallment) * i.monthlyAmount,
     0
   );
 
@@ -214,7 +214,7 @@ export const SpinjamView: React.FC = () => {
               100,
               Math.round((inst.currentInstallment / inst.totalTenorMonths) * 100)
             );
-            const remainingMonths = Math.max(0, inst.totalTenorMonths - inst.currentInstallment + 1);
+            const remainingMonths = Math.max(0, inst.totalTenorMonths - inst.currentInstallment);
             const remainingAmount = remainingMonths * inst.monthlyAmount;
 
             return (
