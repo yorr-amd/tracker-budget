@@ -53,4 +53,6 @@ jobs:
           releaseBody: 'Pembaruan aplikasi desktop Tracker Budget. Silakan unduh installer atau file binary di bawah ini. Aplikasi yang sudah terpasang akan otomatis mendeteksi pembaruan ini via fitur Auto-Update.'
           releaseDraft: false
           prerelease: false
+          includeUpdaterJson: true
+          updaterJsonKeepUniversal: true
           args: ${{ matrix.args }}
