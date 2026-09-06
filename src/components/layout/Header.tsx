@@ -19,15 +19,20 @@ export const Header: React.FC<HeaderProps> = ({
 
   useEffect(() => {
     setMounted(true);
-    const isDarkStored =
-      localStorage.getItem('theme') === 'dark' ||
-      (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches);
-    setIsDark(isDarkStored);
-    if (isDarkStored) {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
+    const syncTheme = () => {
+      const isDarkStored =
+        localStorage.getItem('theme') === 'dark' ||
+        (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      setIsDark(isDarkStored);
+      if (isDarkStored) {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+    };
+    syncTheme();
+    window.addEventListener('theme-changed', syncTheme);
+    return () => window.removeEventListener('theme-changed', syncTheme);
   }, []);
 
   const toggleTheme = () => {
@@ -40,6 +45,7 @@ export const Header: React.FC<HeaderProps> = ({
       document.documentElement.classList.remove('dark');
       localStorage.setItem('theme', 'light');
     }
+    window.dispatchEvent(new Event('theme-changed'));
   };
 
   const todayStr = getTodayDateString();

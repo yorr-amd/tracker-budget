@@ -10,6 +10,7 @@ import { useBudgetStore } from '@/hooks/useBudgetStore';
 import { Category } from '@/types';
 import { ICON_OPTIONS, COLOR_OPTIONS } from '@/lib/constants/defaults';
 import { exportDataToJSON } from '@/lib/utils';
+import { useAppUpdater } from '@/hooks/useAppUpdater';
 import {
   Settings as SettingsIcon,
   Download,
@@ -22,6 +23,12 @@ import {
   HardDrive,
   CheckCircle,
   Monitor,
+  Sun,
+  Moon,
+  RefreshCw,
+  ExternalLink,
+  GitBranch,
+  Sparkles,
 } from 'lucide-react';
 
 export const SettingsView: React.FC = () => {
@@ -36,8 +43,50 @@ export const SettingsView: React.FC = () => {
   } = useBudgetStore();
   const { toast } = useToast();
 
-  const [activeTab, setActiveTab] = useState<'categories' | 'backup' | 'about'>('categories');
+  const [activeTab, setActiveTab] = useState<'categories' | 'appearance' | 'backup' | 'about'>('categories');
   const [categoryType, setCategoryType] = useState<'expense' | 'income'>('expense');
+
+  const [themeMode, setThemeMode] = useState<'light' | 'dark' | 'system'>(() => {
+    const stored = localStorage.getItem('theme');
+    if (stored === 'light' || stored === 'dark') return stored;
+    return 'system';
+  });
+
+  const {
+    isTauriApp,
+    status: updateStatus,
+    updateInfo,
+    downloadProgress,
+    errorMessage: updateError,
+    checkForUpdates,
+    installUpdate,
+  } = useAppUpdater();
+
+  const handleSelectTheme = (mode: 'light' | 'dark' | 'system') => {
+    setThemeMode(mode);
+    if (mode === 'system') {
+      localStorage.removeItem('theme');
+      const isSysDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+      if (isSysDark) {
+        document.documentElement.classList.add('dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+      }
+    } else if (mode === 'dark') {
+      localStorage.setItem('theme', 'dark');
+      document.documentElement.classList.add('dark');
+    } else {
+      localStorage.setItem('theme', 'light');
+      document.documentElement.classList.remove('dark');
+    }
+    window.dispatchEvent(new Event('theme-changed'));
+    toast.success(
+      `Tema berhasil diubah ke mode ${
+        mode === 'system' ? 'Ikuti Sistem' : mode === 'dark' ? 'Gelap' : 'Terang'
+      }.`,
+      'Tema Diperbarui'
+    );
+  };
 
   // Confirm modals
   const [confirmDeleteCat, setConfirmDeleteCat] = useState<{ id: string; name: string } | null>(null);
@@ -185,10 +234,10 @@ export const SettingsView: React.FC = () => {
       </div>
 
       {/* Tab Selector */}
-      <div className="flex border-b border-zinc-200 dark:border-zinc-800 gap-6 text-sm font-medium">
+      <div className="flex border-b border-zinc-200 dark:border-zinc-800 gap-6 text-sm font-medium overflow-x-auto">
         <button
           onClick={() => setActiveTab('categories')}
-          className={`pb-3 border-b-2 transition-all cursor-pointer ${
+          className={`pb-3 border-b-2 transition-all cursor-pointer whitespace-nowrap ${
             activeTab === 'categories'
               ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400 font-bold'
               : 'border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
@@ -197,8 +246,18 @@ export const SettingsView: React.FC = () => {
           Kelola Kategori
         </button>
         <button
+          onClick={() => setActiveTab('appearance')}
+          className={`pb-3 border-b-2 transition-all cursor-pointer whitespace-nowrap ${
+            activeTab === 'appearance'
+              ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400 font-bold'
+              : 'border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
+          }`}
+        >
+          Tampilan & Tema
+        </button>
+        <button
           onClick={() => setActiveTab('backup')}
-          className={`pb-3 border-b-2 transition-all cursor-pointer ${
+          className={`pb-3 border-b-2 transition-all cursor-pointer whitespace-nowrap ${
             activeTab === 'backup'
               ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400 font-bold'
               : 'border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
@@ -208,13 +267,13 @@ export const SettingsView: React.FC = () => {
         </button>
         <button
           onClick={() => setActiveTab('about')}
-          className={`pb-3 border-b-2 transition-all cursor-pointer ${
+          className={`pb-3 border-b-2 transition-all cursor-pointer whitespace-nowrap ${
             activeTab === 'about'
               ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400 font-bold'
               : 'border-transparent text-zinc-500 hover:text-zinc-800 dark:hover:text-zinc-200'
           }`}
         >
-          Tentang Aplikasi & Desktop Native
+          Tentang & Pembaruan
         </button>
       </div>
 
@@ -301,7 +360,92 @@ export const SettingsView: React.FC = () => {
         </div>
       )}
 
-      {/* TAB 2: Backup & Restore */}
+      {/* TAB 2: Appearance & Theme */}
+      {activeTab === 'appearance' && (
+        <div className="space-y-6 max-w-3xl">
+          <Card className="space-y-6 p-6">
+            <div>
+              <h3 className="text-base font-bold text-zinc-900 dark:text-zinc-100 flex items-center gap-2">
+                <Sparkles className="w-5 h-5 text-amber-500" />
+                <span>Pengaturan Tema & Tampilan</span>
+              </h3>
+              <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
+                Pilih gaya tampilan yang paling nyaman untuk mata Anda saat mencatat keuangan.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {/* Light Mode */}
+              <button
+                type="button"
+                onClick={() => handleSelectTheme('light')}
+                className={`p-4 rounded-2xl border-2 text-left transition-all cursor-pointer flex flex-col justify-between h-36 ${
+                  themeMode === 'light'
+                    ? 'border-emerald-600 bg-emerald-50/40 dark:bg-emerald-950/20 ring-2 ring-emerald-500/20 shadow-sm'
+                    : 'border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700 bg-white dark:bg-zinc-900'
+                }`}
+              >
+                <div className="w-9 h-9 rounded-xl bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 flex items-center justify-center">
+                  <Sun className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-sm text-zinc-900 dark:text-zinc-100">Mode Terang</span>
+                    {themeMode === 'light' && <CheckCircle className="w-4 h-4 text-emerald-600" />}
+                  </div>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">Cerah & kontras jelas</p>
+                </div>
+              </button>
+
+              {/* Dark Mode */}
+              <button
+                type="button"
+                onClick={() => handleSelectTheme('dark')}
+                className={`p-4 rounded-2xl border-2 text-left transition-all cursor-pointer flex flex-col justify-between h-36 ${
+                  themeMode === 'dark'
+                    ? 'border-emerald-600 bg-emerald-50/40 dark:bg-emerald-950/20 ring-2 ring-emerald-500/20 shadow-sm'
+                    : 'border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700 bg-white dark:bg-zinc-900'
+                }`}
+              >
+                <div className="w-9 h-9 rounded-xl bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
+                  <Moon className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-sm text-zinc-900 dark:text-zinc-100">Mode Gelap</span>
+                    {themeMode === 'dark' && <CheckCircle className="w-4 h-4 text-emerald-600" />}
+                  </div>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">Nyaman di malam hari</p>
+                </div>
+              </button>
+
+              {/* System Mode */}
+              <button
+                type="button"
+                onClick={() => handleSelectTheme('system')}
+                className={`p-4 rounded-2xl border-2 text-left transition-all cursor-pointer flex flex-col justify-between h-36 ${
+                  themeMode === 'system'
+                    ? 'border-emerald-600 bg-emerald-50/40 dark:bg-emerald-950/20 ring-2 ring-emerald-500/20 shadow-sm'
+                    : 'border-zinc-200 dark:border-zinc-800 hover:border-zinc-300 dark:hover:border-zinc-700 bg-white dark:bg-zinc-900'
+                }`}
+              >
+                <div className="w-9 h-9 rounded-xl bg-zinc-100 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 flex items-center justify-center">
+                  <Monitor className="w-5 h-5" />
+                </div>
+                <div>
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-sm text-zinc-900 dark:text-zinc-100">Ikuti Sistem</span>
+                    {themeMode === 'system' && <CheckCircle className="w-4 h-4 text-emerald-600" />}
+                  </div>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">Otomatis tema Windows</p>
+                </div>
+              </button>
+            </div>
+          </Card>
+        </div>
+      )}
+
+      {/* TAB 3: Backup & Restore */}
       {activeTab === 'backup' && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <Card className="space-y-4">
@@ -360,9 +504,133 @@ export const SettingsView: React.FC = () => {
         </div>
       )}
 
-      {/* TAB 3: About & Privacy */}
+      {/* TAB 4: About & Auto-Update */}
       {activeTab === 'about' && (
-        <div className="space-y-4">
+        <div className="space-y-6 max-w-3xl">
+          {/* Card: Auto-Update & GitHub Releases */}
+          <Card className="space-y-5 p-6 border-emerald-500/30 bg-emerald-50/10 dark:bg-emerald-950/10">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-zinc-100 dark:border-zinc-800">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-md">
+                  <RefreshCw className={`w-5 h-5 ${updateStatus === 'checking' ? 'animate-spin' : ''}`} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-bold text-zinc-900 dark:text-zinc-100">
+                      Pembaruan Aplikasi (Auto-Update)
+                    </h3>
+                    <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300">
+                      v0.1.0
+                    </span>
+                  </div>
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-0.5">
+                    Terhubung langsung ke GitHub Releases (<code className="text-emerald-600 dark:text-emerald-400">yorr-amd/tracker-budget</code>)
+                  </p>
+                </div>
+              </div>
+
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={() => checkForUpdates(true)}
+                isLoading={updateStatus === 'checking'}
+                disabled={updateStatus === 'downloading'}
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Periksa Pembaruan</span>
+              </Button>
+            </div>
+
+            {/* Status Messages */}
+            {updateStatus === 'up-to-date' && (
+              <div className="p-3 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 rounded-xl text-xs text-emerald-800 dark:text-emerald-300 flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>Aplikasi Anda sudah menggunakan versi paling mutakhir (v0.1.0).</span>
+              </div>
+            )}
+
+            {updateStatus === 'available' && updateInfo && (
+              <div className="p-4 bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 rounded-xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-blue-900 dark:text-blue-200">
+                    Versi Baru Tersedia: {updateInfo.version}
+                  </span>
+                  {updateInfo.date && (
+                    <span className="text-[11px] text-zinc-500">{updateInfo.date}</span>
+                  )}
+                </div>
+                {updateInfo.body && (
+                  <p className="text-xs text-zinc-600 dark:text-zinc-400 whitespace-pre-line bg-white/60 dark:bg-zinc-900/60 p-2.5 rounded-lg">
+                    {updateInfo.body}
+                  </p>
+                )}
+                <Button
+                  variant="primary"
+                  size="sm"
+                  onClick={installUpdate}
+                  className="w-full sm:w-auto"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Unduh & Pasang Sekarang</span>
+                </Button>
+              </div>
+            )}
+
+            {updateStatus === 'downloading' && (
+              <div className="space-y-2 p-4 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-xl">
+                <div className="flex justify-between text-xs font-semibold text-amber-900 dark:text-amber-200">
+                  <span>Mengunduh paket pembaruan...</span>
+                  <span>{downloadProgress}%</span>
+                </div>
+                <div className="w-full h-2 bg-amber-200 dark:bg-amber-900/60 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-amber-600 transition-all duration-300"
+                    style={{ width: `${downloadProgress}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {updateStatus === 'ready' && (
+              <div className="p-3 bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 rounded-xl text-xs text-emerald-800 dark:text-emerald-300 flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>Pembaruan selesai diunduh! Aplikasi sedang memulai ulang...</span>
+              </div>
+            )}
+
+            {updateStatus === 'error' && updateError && (
+              <div className="p-3 bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 rounded-xl text-xs text-rose-800 dark:text-rose-300 flex items-start gap-2">
+                <span className="shrink-0 mt-0.5">⚠️</span>
+                <span>{updateError}</span>
+              </div>
+            )}
+
+            {/* GitHub Links */}
+            <div className="flex flex-wrap gap-3 pt-2 text-xs">
+              <a
+                href="https://github.com/yorr-amd/tracker-budget"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium"
+              >
+                <GitBranch className="w-3.5 h-3.5" />
+                <span>GitHub Repository</span>
+                <ExternalLink className="w-3 h-3 opacity-60" />
+              </a>
+              <span className="text-zinc-300 dark:text-zinc-700">•</span>
+              <a
+                href="https://github.com/yorr-amd/tracker-budget/releases"
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1.5 text-zinc-600 dark:text-zinc-400 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium"
+              >
+                <span>Daftar Rilis (GitHub Releases)</span>
+                <ExternalLink className="w-3 h-3 opacity-60" />
+              </a>
+            </div>
+          </Card>
+
+          {/* Card: About Native Engine */}
           <Card className="space-y-4 p-6">
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-emerald-600 to-teal-500 text-white flex items-center justify-center shadow-md">
