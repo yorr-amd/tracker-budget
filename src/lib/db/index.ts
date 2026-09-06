@@ -7,9 +7,10 @@ import {
   SavingsGoal,
   SavingsLog,
   RecurringTransaction,
+  Installment,
 } from '@/types';
 import { DEFAULT_ACCOUNTS, DEFAULT_CATEGORIES } from '../constants/defaults';
-import { generateId, getTodayDateString } from '../utils';
+import { generateId, getTodayDateString, calculateNextDueDate } from '../utils';
 
 export class BudgetDatabase extends Dexie {
   accounts!: Table<Account, string>;
@@ -19,6 +20,7 @@ export class BudgetDatabase extends Dexie {
   savingsGoals!: Table<SavingsGoal, string>;
   savingsLogs!: Table<SavingsLog, string>;
   recurringTransactions!: Table<RecurringTransaction, string>;
+  installments!: Table<Installment, string>;
 
   constructor() {
     super('TrackerBudgetTauriDB');
@@ -30,6 +32,7 @@ export class BudgetDatabase extends Dexie {
       savingsGoals: 'id, isCompleted',
       savingsLogs: 'id, goalId, accountId, date',
       recurringTransactions: 'id, isActive, nextDueDate',
+      installments: 'id, type, isCompleted, nextDueDate',
     });
   }
 }
@@ -298,6 +301,52 @@ export async function withdrawSavingsGoal(goalId: string, accountId: string, amo
   });
 }
 
+// Operasi Pembayaran Cicilan (SPayLater & SPinjam)
+export async function payInstallment(installmentId: string): Promise<void> {
+  return await db.transaction('rw', [db.installments, db.transactions, db.accounts], async () => {
+    const inst = await db.installments.get(installmentId);
+    if (!inst) throw new Error('Data cicilan tidak ditemukan');
+    if (inst.isCompleted) throw new Error('Cicilan ini sudah lunas');
+
+    const account = await db.accounts.get(inst.accountId);
+    if (!account) throw new Error('Akun pembayaran tidak ditemukan');
+
+    const isSpaylater = inst.type === 'spaylater';
+    const categoryId = isSpaylater ? 'cat_spaylater' : 'cat_spinjam';
+    const typeLabel = isSpaylater ? 'SPayLater' : 'SPinjam';
+    const notes = `Cicilan ${typeLabel} (${inst.currentInstallment}/${inst.totalTenorMonths}): ${inst.title}`;
+
+    // 1. Catat transaksi pengeluaran
+    const txId = generateId();
+    await db.transactions.add({
+      id: txId,
+      accountId: inst.accountId,
+      categoryId,
+      type: 'expense',
+      amount: inst.monthlyAmount,
+      date: getTodayDateString(),
+      notes,
+      createdAt: new Date().toISOString(),
+    });
+
+    // 2. Kurangi saldo akun
+    await db.accounts.update(inst.accountId, {
+      balance: account.balance - inst.monthlyAmount,
+    });
+
+    // 3. Update progres cicilan
+    const nextInstallmentNum = inst.currentInstallment + 1;
+    const isCompleted = nextInstallmentNum > inst.totalTenorMonths;
+    const nextDue = calculateNextDueDate(inst.nextDueDate, 'monthly', inst.dueDayOfMonth);
+
+    await db.installments.update(inst.id, {
+      currentInstallment: isCompleted ? inst.totalTenorMonths : nextInstallmentNum,
+      isCompleted,
+      nextDueDate: nextDue,
+    });
+  });
+}
+
 // Reset Database ke Default
 export async function resetAllDataToDefault() {
   await db.transaction('rw', [
@@ -308,6 +357,7 @@ export async function resetAllDataToDefault() {
     db.savingsGoals,
     db.savingsLogs,
     db.recurringTransactions,
+    db.installments,
   ], async () => {
     await db.accounts.clear();
     await db.categories.clear();
@@ -316,6 +366,7 @@ export async function resetAllDataToDefault() {
     await db.savingsGoals.clear();
     await db.savingsLogs.clear();
     await db.recurringTransactions.clear();
+    await db.installments.clear();
 
     await db.accounts.bulkAdd(DEFAULT_ACCOUNTS);
     await db.categories.bulkAdd(DEFAULT_CATEGORIES);
@@ -331,6 +382,7 @@ export async function exportDatabaseBackup() {
   const savingsGoals = await db.savingsGoals.toArray();
   const savingsLogs = await db.savingsLogs.toArray();
   const recurringTransactions = await db.recurringTransactions.toArray();
+  const installments = await db.installments.toArray();
 
   return {
     version: 1,
@@ -343,6 +395,7 @@ export async function exportDatabaseBackup() {
       savingsGoals,
       savingsLogs,
       recurringTransactions,
+      installments,
     },
   };
 }
@@ -355,9 +408,9 @@ export function validateBackupData(backupJson: any): void {
     throw new Error('Format file backup tidak valid: properti "data" tidak ditemukan.');
   }
 
-  const { accounts, categories, transactions, budgets, savingsGoals, savingsLogs, recurringTransactions } = backupJson.data;
+  const { accounts, categories, transactions, budgets, savingsGoals, savingsLogs, recurringTransactions, installments } = backupJson.data;
 
-  if (!accounts && !categories && !transactions && !budgets && !savingsGoals) {
+  if (!accounts && !categories && !transactions && !budgets && !savingsGoals && !installments) {
     throw new Error('Data cadangan kosong atau tidak memiliki tabel esensial yang dikenali.');
   }
 
@@ -430,13 +483,23 @@ export function validateBackupData(backupJson: any): void {
       }
     }
   }
+
+  if (installments !== undefined) {
+    if (!Array.isArray(installments)) throw new Error('Format data "installments" harus berupa array.');
+    for (let i = 0; i < installments.length; i++) {
+      const ins = installments[i];
+      if (!ins || typeof ins !== 'object' || !ins.id || typeof ins.title !== 'string' || typeof ins.monthlyAmount !== 'number' || !ins.accountId) {
+        throw new Error(`Data cicilan pada baris ke-${i + 1} tidak valid.`);
+      }
+    }
+  }
 }
 
 export async function importDatabaseBackup(backupJson: any) {
   // Validasi skema sebelum menyentuh database sama sekali (mencegah data wipe jika file korup)
   validateBackupData(backupJson);
 
-  const { accounts, categories, transactions, budgets, savingsGoals, savingsLogs, recurringTransactions } = backupJson.data;
+  const { accounts, categories, transactions, budgets, savingsGoals, savingsLogs, recurringTransactions, installments } = backupJson.data;
 
   await db.transaction('rw', [
     db.accounts,
@@ -446,6 +509,7 @@ export async function importDatabaseBackup(backupJson: any) {
     db.savingsGoals,
     db.savingsLogs,
     db.recurringTransactions,
+    db.installments,
   ], async () => {
     if (accounts) {
       await db.accounts.clear();
@@ -474,6 +538,10 @@ export async function importDatabaseBackup(backupJson: any) {
     if (recurringTransactions) {
       await db.recurringTransactions.clear();
       await db.recurringTransactions.bulkAdd(recurringTransactions);
+    }
+    if (installments) {
+      await db.installments.clear();
+      await db.installments.bulkAdd(installments);
     }
   });
 }

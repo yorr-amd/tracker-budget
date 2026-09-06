@@ -56,6 +56,8 @@ export const Header: React.FC<HeaderProps> = ({
     wallets: 'Dompet & Rekening',
     budgets: 'Alokasi & Anggaran',
     goals: 'Target Tabungan',
+    spaylater: 'Cicilan SPayLater',
+    spinjam: 'Cicilan SPinjam',
     recurring: 'Tagihan Rutin',
     reports: 'Laporan & Analitik',
     settings: 'Pengaturan & Cadangan',

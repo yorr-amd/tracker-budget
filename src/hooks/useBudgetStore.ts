@@ -8,6 +8,7 @@ import {
   updateTransaction,
   depositSavingsGoal,
   withdrawSavingsGoal,
+  payInstallment,
   resetAllDataToDefault,
   exportDatabaseBackup,
   importDatabaseBackup,
@@ -19,6 +20,7 @@ import {
   Budget,
   SavingsGoal,
   RecurringTransaction,
+  Installment,
   FinancialSummary,
 } from '@/types';
 import { getCurrentPeriod, generateId } from '@/lib/utils';
@@ -47,6 +49,8 @@ export function useBudgetStore() {
   const savingsLogs = useLiveQuery(() => db.savingsLogs.toArray(), []) || [];
   const recurringTransactions =
     useLiveQuery(() => db.recurringTransactions.toArray(), []) || [];
+  const installments =
+    useLiveQuery(() => db.installments.toArray(), []) || [];
 
   // Hitung ringkasan finansial (Total Saldo, Pemasukan, Pengeluaran Bulan Ini)
   const calculateSummary = (period: string = getCurrentPeriod()): FinancialSummary => {
@@ -205,6 +209,25 @@ export function useBudgetStore() {
     await db.recurringTransactions.delete(id);
   };
 
+  // Installment (Cicilan SPayLater & SPinjam) Actions
+  const addInstallment = async (installment: Omit<Installment, 'id' | 'createdAt'>) => {
+    const id = generateId();
+    await db.installments.add({
+      ...installment,
+      id,
+      createdAt: new Date().toISOString(),
+    });
+    return id;
+  };
+
+  const updateInstallment = async (id: string, updates: Partial<Installment>) => {
+    await db.installments.update(id, updates);
+  };
+
+  const deleteInstallment = async (id: string) => {
+    await db.installments.delete(id);
+  };
+
   return {
     isInitialized,
     accounts,
@@ -214,6 +237,7 @@ export function useBudgetStore() {
     savingsGoals,
     savingsLogs,
     recurringTransactions,
+    installments,
     calculateSummary,
     getCategorySpending,
     createTransaction,
@@ -236,6 +260,10 @@ export function useBudgetStore() {
     updateRecurring,
     toggleRecurringActive,
     deleteRecurring,
+    addInstallment,
+    updateInstallment,
+    deleteInstallment,
+    payInstallment,
     resetAllDataToDefault,
     exportDatabaseBackup,
     importDatabaseBackup,

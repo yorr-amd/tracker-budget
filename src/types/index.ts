@@ -92,6 +92,24 @@ export interface RecurringTransaction {
   createdAt: string;
 }
 
+export type InstallmentType = 'spaylater' | 'spinjam';
+
+export interface Installment {
+  id: string;
+  type: InstallmentType;
+  title: string;
+  totalAmount?: number;
+  monthlyAmount: number;
+  totalTenorMonths: number;
+  currentInstallment: number;
+  dueDayOfMonth: number; // 1-31
+  nextDueDate: string; // YYYY-MM-DD
+  accountId: string;
+  notes?: string;
+  isCompleted: boolean;
+  createdAt: string;
+}
+
 export interface FinancialSummary {
   totalBalance: number;
   totalIncome: number;
@@ -113,6 +131,8 @@ export type ActiveTab =
   | 'wallets'
   | 'budgets'
   | 'goals'
+  | 'spaylater'
+  | 'spinjam'
   | 'recurring'
   | 'reports'
   | 'settings';

@@ -8,6 +8,8 @@ import { TransactionsView } from './views/TransactionsView';
 import { WalletsView } from './views/WalletsView';
 import { BudgetsView } from './views/BudgetsView';
 import { GoalsView } from './views/GoalsView';
+import { SpaylaterView } from './views/SpaylaterView';
+import { SpinjamView } from './views/SpinjamView';
 import { RecurringView } from './views/RecurringView';
 import { ReportsView } from './views/ReportsView';
 import { SettingsView } from './views/SettingsView';
@@ -45,6 +47,10 @@ export default function App() {
         return <BudgetsView />;
       case 'goals':
         return <GoalsView />;
+      case 'spaylater':
+        return <SpaylaterView />;
+      case 'spinjam':
+        return <SpinjamView />;
       case 'recurring':
         return <RecurringView />;
       case 'reports':

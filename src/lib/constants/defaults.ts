@@ -1,24 +1,49 @@
 import { Account, Category } from '@/types';
 
 export const DEFAULT_ACCOUNTS: Account[] = [
+  // REKENING BANK
   {
-    id: 'acc_cash_1',
-    name: 'Dompet Tunai',
-    type: 'cash',
+    id: 'acc_bank_bsi',
+    name: 'Bank BSI',
+    type: 'bank',
     balance: 0,
-    icon: 'Wallet',
-    color: '#10B981', // Emerald
+    icon: 'Landmark',
+    color: '#00A39D', // BSI Teal
+    accountNumber: '',
     isDefault: true,
     createdAt: new Date().toISOString(),
   },
   {
-    id: 'acc_bank_bca',
-    name: 'Bank BCA',
+    id: 'acc_bank_jago',
+    name: 'Bank Jago',
     type: 'bank',
     balance: 0,
     icon: 'Landmark',
-    color: '#3B82F6', // Blue
+    color: '#F59E0B', // Jago Amber
     accountNumber: '',
+    isDefault: false,
+    createdAt: new Date().toISOString(),
+  },
+  {
+    id: 'acc_bank_seabank',
+    name: 'SeaBank',
+    type: 'bank',
+    balance: 0,
+    icon: 'Landmark',
+    color: '#F97316', // SeaBank Orange
+    accountNumber: '',
+    isDefault: false,
+    createdAt: new Date().toISOString(),
+  },
+
+  // E-WALLET
+  {
+    id: 'acc_ewallet_dana',
+    name: 'DANA',
+    type: 'ewallet',
+    balance: 0,
+    icon: 'Smartphone',
+    color: '#118EEA', // DANA Blue
     isDefault: false,
     createdAt: new Date().toISOString(),
   },
@@ -28,17 +53,17 @@ export const DEFAULT_ACCOUNTS: Account[] = [
     type: 'ewallet',
     balance: 0,
     icon: 'Smartphone',
-    color: '#06B6D4', // Cyan
+    color: '#00AED6', // GoPay Cyan
     isDefault: false,
     createdAt: new Date().toISOString(),
   },
   {
-    id: 'acc_ewallet_dana',
-    name: 'DANA',
+    id: 'acc_ewallet_shopeepay',
+    name: 'ShopeePay',
     type: 'ewallet',
     balance: 0,
     icon: 'Smartphone',
-    color: '#0284C7', // Sky
+    color: '#EE4D2D', // ShopeePay Orange/Red
     isDefault: false,
     createdAt: new Date().toISOString(),
   },
@@ -71,11 +96,19 @@ export const DEFAULT_CATEGORIES: Category[] = [
     isDefault: true,
   },
   {
-    id: 'cat_bills',
-    name: 'Tagihan & Utilitas',
+    id: 'cat_spaylater',
+    name: 'Cicilan SPayLater',
     type: 'expense',
-    icon: 'Zap',
-    color: '#EF4444', // Red
+    icon: 'ShoppingBag',
+    color: '#EE4D2D', // Shopee Orange
+    isDefault: true,
+  },
+  {
+    id: 'cat_spinjam',
+    name: 'Cicilan SPinjam',
+    type: 'expense',
+    icon: 'HandCoins',
+    color: '#EA580C', // Orange Deep
     isDefault: true,
   },
   {
